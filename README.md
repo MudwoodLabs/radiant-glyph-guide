@@ -49,14 +49,15 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
 12. [Signing Challenge](#signing-challenge)
 13. [Fee Calculations & Cost Analysis](#fee-calculations--cost-analysis)
 14. [IPFS Integration](#ipfs-integration)
-15. [Common Errors & Solutions](#common-errors--solutions)
-16. [Complete Implementation Example](#complete-implementation-example)
-17. [Testing & Verification](#testing--verification)
-18. [Security Best Practices](#security-best-practices)
-19. [What's New in V2](#whats-new-in-v2)
-20. [Appendix: Quick Reference](#appendix-quick-reference)
-21. [Disclaimer & Warranty](#disclaimer--warranty)
-22. [Changelog](#changelog)
+15. [Validating Your Builder Against Mainnet](#validating-your-builder-against-mainnet)
+16. [Common Errors & Solutions](#common-errors--solutions)
+17. [Complete Implementation Example](#complete-implementation-example)
+18. [Testing & Verification](#testing--verification)
+19. [Security Best Practices](#security-best-practices)
+20. [What's New in V2](#whats-new-in-v2)
+21. [Appendix: Quick Reference](#appendix-quick-reference)
+22. [Disclaimer & Warranty](#disclaimer--warranty)
+23. [Changelog](#changelog)
 
 ---
 
@@ -230,6 +231,41 @@ WRONG:   d824<ref>7576a914...  // The 24 breaks it
 > pulling from the intended org** — an attacker forking the less-canonical
 > path could insert compromised builds. Pinning SHAs (as shown below for
 > radiantjs) is the durable defense.
+
+### Photonic as Reference, Not as Truth
+
+Photonic Wallet's TypeScript source is the most widely-deployed Radiant
+wallet codebase and the de-facto reference for Glyph/dMint payload
+shape. Most readers of this guide will (correctly) consult Photonic
+when a question isn't answered here.
+
+**Photonic is not infallible.** Treat it as a reference, not as a
+specification:
+
+- **Photonic encodes; Photonic does not always validate.** Photonic
+  wraps `main.b` in CBOR tag 64 on emit (see "Decoding `main.b`"
+  above) but accepts both wrapped and unwrapped forms on decode.
+  Following the emit side blindly produces tokens that decode in
+  Photonic but TypeError in cbor2-based or strict decoders.
+- **Photonic targets V2; the chain runs V1.** Photonic's dMint UI
+  builds V2 deploy shapes. Every dMint contract observable on
+  mainnet is V1. Mirroring Photonic for dMint will silently produce
+  unmineable tokens. (See the V2 footgun section.)
+- **Photonic has security-questionable patterns of its own.** Don't
+  copy `eval`-adjacent CBOR parsing tricks, ad-hoc PRNG seeding for
+  ref-seeds, or signing flows that round-trip private keys through
+  the renderer thread. Each pattern needs to clear your own threat
+  model.
+
+**Divergence-tracking discipline.** When you deviate from Photonic
+intentionally — to follow this guide's mainnet-verified shapes, to
+fix a bug, or to harden a code path — record the deviation in a
+`docs/divergence-from-photonic.md` file at the root of your wallet
+project. Each entry: (a) the Photonic source file + commit + line
+range, (b) the divergent path in your code, (c) a one-paragraph
+justification, (d) the mainnet txid or test fixture that validates
+the divergent shape. This is how you keep Photonic as a reference
+without inheriting every Photonic-shaped bug.
 
 ### Software Requirements
 
@@ -1011,6 +1047,47 @@ function createGlyphPayload(photoData, metadata) {
 > configured incorrectly. Handle `Uint8Array` as the last step before CBOR
 > encoding.
 
+### Decoding `main.b`: Handle CBORTag 64 (Uint8 array)
+
+Photonic Wallet — the canonical Radiant browser wallet — wraps embedded
+binary blobs in **CBOR tag 64** (RFC 8746 "uint8 typed array"). The
+on-chain GLYPH dMint deploy and every Photonic-built NFT mint with
+embedded media use this encoding. If your decoder does not unwrap the
+tag, calling `bytes(payload['main']['b'])` (or the JS equivalent) raises
+a `TypeError` and your wallet either crashes or silently renders a
+blank card.
+
+**Defensive pattern (Python with cbor2):**
+
+```python
+import cbor2
+
+def decode_main_blob(main_field):
+    blob = main_field["b"]
+    if isinstance(blob, cbor2.CBORTag):
+        blob = blob.value
+    return bytes(blob)
+```
+
+**Defensive pattern (JavaScript):**
+
+```javascript
+function decodeMainBlob(main) {
+    let blob = main.b;
+    // cbor-js represents tags as { tag: N, value: ... }
+    if (blob && typeof blob === 'object' && 'tag' in blob && 'value' in blob) {
+        blob = blob.value;
+    }
+    return new Uint8Array(blob);
+}
+```
+
+When building (not decoding), follow the convention: emit raw bytes
+without a tag wrapper for new mints — the unwrap is purely a decode-side
+compatibility shim for Photonic-built tokens already on chain.
+Implementation reference: pyrxd `src/pyrxd/glyph/payload.py`
+`decode_payload`'s CBORTag-64 unwrap (lines 115–122).
+
 ---
 
 ## Architecture
@@ -1225,99 +1302,100 @@ by exactly 6 state-item pushes in V1, or 10 in V2). A bare-byte search for `0xbd
 sufficient — the byte can appear in push-data payloads. See [§8 — Decentralized Mint](#decentralized-mint-dmint)
 for the V1/V2 dispatch logic and the canonical opcode walker below.
 
-### Opcode-aware classification (mandatory)
+### Token-Burn Defense: Coin Selection Must Reject Token-Bearing UTXOs
 
-Bitcoin/Radiant scripts are an **opcode stream** where push opcodes are
-followed by raw payload bytes that are not opcodes:
+When a wallet picks UTXOs for an ordinary RXD send (or a mint funding
+input), spending an FT, NFT, or dMint UTXO into a plain P2PKH change
+output **silently and irreversibly destroys the token**. The 36-byte
+ref disappears from the chain; the token holder is debited; no error,
+no warning. This has burned tokens in the wild.
 
-| Opcode | Effect |
-|---|---|
-| `0x01..0x4B` | Push the next N bytes (N = opcode value) |
-| `0x4C` PUSHDATA1 | Next byte is length, then push that many |
-| `0x4D` PUSHDATA2 | Next 2 bytes LE are length, then push |
-| `0x4E` PUSHDATA4 | Next 4 bytes LE are length, then push |
-| anything else | Single-byte opcode, no payload |
+Every wallet's coin selector must exclude token-bearing scripts. The
+deny-list is any `OP_PUSHINPUTREF`-family opcode in **opcode position**:
 
-A bare-byte scan **cannot** distinguish opcode `0xd2`
-(`OP_DISALLOWPUSHINPUTREF`) from the 7th byte of a 20-byte P2PKH hash
-payload that happens to be `0xd2`. The probability that a random
-20-byte payload contains at least one byte in `0xD0..0xD8` is
-`1 - (247/256)^20 ≈ 0.511` — **~51% of random P2PKH addresses** will
-contain a deny-range byte somewhere in their payload.
+| Hex  | Opcode                          | Where it appears       |
+|------|---------------------------------|------------------------|
+| `d0` | `OP_PUSHINPUTREF`               | FT holders, dMint refs |
+| `d1` | `OP_REQUIREINPUTREF`            | covenants              |
+| `d2` | `OP_DISALLOWPUSHINPUTREF`       | covenants              |
+| `d3` | `OP_DISALLOWPUSHINPUTREFSIBLING`| covenants              |
+| `d4`–`d7` | reserved / related         | future opcodes         |
+| `d8` | `OP_PUSHINPUTREFSINGLETON`      | NFT singletons         |
 
-A naive scanner used as a "is this a token-bearing UTXO?" filter
-therefore rejects roughly half of legitimate plain-P2PKH funding
-addresses. This converts a token-burn defense into a 50% miner DoS.
+**Do not implement this as a substring scan.** A bare `if any(b in
+range(0xd0, 0xd9) for b in script)` rejects ~51% of legitimate P2PKH
+funding UTXOs as a false positive (a random 20-byte pubkey hash has a
+1 - (247/256)^20 ≈ 51% chance of containing at least one byte in
+`0xd0`–`0xd8` *as payload*, not as an opcode). The classifier must
+walk the script as an opcode stream and inspect only the opcode
+positions.
 
-**Rule:** Every script classifier must walk the opcode stream and skip
-push payloads. Use the regexes above (each is `fullmatch` on an exact
-shape, so payload bytes can't leak into opcode position), or use the
-canonical walker:
+**Canonical walker:**
 
 ```python
-def script_contains_opcode(script: bytes, op: int) -> bool:
-    pos = 0
-    n = len(script)
+def is_token_bearing(script: bytes) -> bool:
+    DENY = range(0xD0, 0xD9)
+    pos, n = 0, len(script)
     while pos < n:
-        b = script[pos]
-        if b == op:
+        op = script[pos]
+        if op in DENY:
             return True
-        if 0x01 <= b <= 0x4B:                    # PUSH N
-            pos = 1 + pos + b
-        elif b == 0x4C:                          # PUSHDATA1
-            length = script[pos + 1]
-            pos = pos + 2 + length
-        elif b == 0x4D:                          # PUSHDATA2
-            length = int.from_bytes(script[pos+1:pos+3], "little")
-            pos = pos + 3 + length
-        elif b == 0x4E:                          # PUSHDATA4
-            length = int.from_bytes(script[pos+1:pos+5], "little")
-            pos = pos + 5 + length
+        if 0x01 <= op <= 0x4B:          # direct push N bytes
+            new_pos = 1 + pos + op
+        elif op == 0x4C:                 # OP_PUSHDATA1
+            if pos + 1 >= n: return True
+            new_pos = pos + 2 + script[pos + 1]
+        elif op == 0x4D:                 # OP_PUSHDATA2 (LE)
+            if pos + 2 >= n: return True
+            new_pos = pos + 3 + int.from_bytes(script[pos+1:pos+3], "little")
+        elif op == 0x4E:                 # OP_PUSHDATA4 (LE)
+            if pos + 4 >= n: return True
+            new_pos = pos + 5 + int.from_bytes(script[pos+1:pos+5], "little")
         else:
-            pos += 1
-        if pos > n:
-            return True  # truncated push — refuse / treat conservatively
+            new_pos = pos + 1
+        if new_pos > n:
+            return True                  # truncated push → refuse
+        pos = new_pos
     return False
 ```
 
-This pattern is mandatory anywhere you classify scripts by opcode
-presence — not just for the 0xD0–0xD8 token-burn defense. Reference
-implementations:
+```javascript
+function isTokenBearing(scriptHex) {
+    const s = Buffer.from(scriptHex, 'hex');
+    let pos = 0;
+    while (pos < s.length) {
+        const op = s[pos];
+        if (op >= 0xd0 && op <= 0xd8) return true;
+        let next;
+        if (op >= 0x01 && op <= 0x4b) next = 1 + pos + op;
+        else if (op === 0x4c) { if (pos+1 >= s.length) return true; next = pos+2 + s[pos+1]; }
+        else if (op === 0x4d) { if (pos+2 >= s.length) return true; next = pos+3 + s.readUInt16LE(pos+1); }
+        else if (op === 0x4e) { if (pos+4 >= s.length) return true; next = pos+5 + s.readUInt32LE(pos+1); }
+        else next = pos + 1;
+        if (next > s.length) return true;  // truncated push
+        pos = next;
+    }
+    return false;
+}
+```
 
-- Python: `pyrxd.glyph.dmint.is_token_bearing_script`
-  (`src/pyrxd/glyph/dmint.py` lines 1549–1610) — used to gate
-  funding-UTXO selection in V1 mint builders.
-- JavaScript: same logic in `classifier.mjs` (see reference link above).
+Canonical pyrxd implementation: `src/pyrxd/glyph/dmint.py`
+`is_token_bearing_script` (lines 1549–1610) and its load-bearing call
+site in `find_dmint_funding_utxo` (lines 2157–2246).
 
-### Token-burn defense (funding-input selection)
+**Treat truncated push fields as token-bearing.** A malformed script of
+ambiguous length should not be admitted as funding — refuse it. This
+turns one class of script-parser confusion into a "skip this UTXO"
+rather than a token burn.
 
-When selecting plain-RXD UTXOs to fund a transaction (any of: dMint
-mint, FT transfer, NFT mint commit, fee top-up), wallets **must** skip
-any UTXO whose locking script uses an `OP_PUSHINPUTREF`-family opcode
-(`0xD0..0xD8`) in opcode position. Spending such a UTXO without
-recreating its ref in an output destroys the on-chain reference —
-i.e. burns the token or NFT.
-
-Use the opcode-aware walker from the previous section. Reference
-implementation: `is_token_bearing_script()` in
-`pyrxd.glyph.dmint` (`src/pyrxd/glyph/dmint.py` lines 1549–1610).
-
-Concrete checks gated by this function in pyrxd:
-
-- `find_dmint_funding_utxo` (`src/pyrxd/glyph/dmint.py` line ~2157):
-  enumerates the deployer's plain-RXD UTXOs and rejects any with an
-  `OP_PUSHINPUTREF`-family opcode in the script.
-- `_build_dmint_v1_mint_tx`: refuses to use a funding UTXO that
-  fails the same check before signing.
-
-The opcode range is `0xD0..0xD8` inclusive:
-`0xD0` OP_PUSHINPUTREF, `0xD1` OP_REQUIREINPUTREF,
-`0xD2` OP_DISALLOWPUSHINPUTREF, `0xD3` OP_DISALLOWPUSHINPUTREFSIBLING,
-`0xD4..0xD7` reserved/related, `0xD8` OP_PUSHINPUTREFSINGLETON.
-
-**Do not** implement this as a bare-byte scan — see "Opcode-aware
-classification" for why a `0xd2 in script` check rejects ~51% of
-honest P2PKH addresses.
+**Adversarial test you must keep in your suite.** Construct a P2PKH
+whose 20-byte pubkey hash is `[0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6,
+0xd7, 0xd8] * 3` truncated to 20 bytes — every payload byte is in the
+deny range. A correct opcode-aware walker classifies this as plain
+P2PKH (because `0x14` push-20 announces the payload). A bare-byte scan
+rejects it. If your test passes for the buggy classifier, your test is
+not exercising the false-positive case — fix the test first, then the
+classifier.
 
 ### Constructing an FT Holder Output (Sending)
 
@@ -1878,6 +1956,47 @@ function encodeGlyphData(data) {
 }
 ```
 
+### CBOR Payload Size Cap (DoS vs Real Deploys)
+
+Your CBOR decoder MUST cap input size before calling `cbor.decode()`
+or equivalent. Without a cap, a malicious deploy can push a 2³²-byte
+payload via `OP_PUSHDATA4` and force your indexer/explorer/wallet to
+allocate gigabytes or spend seconds in the decode path. The decoder
+is a DoS surface for any service that fetches reveal scriptSigs.
+
+**Pick a cap deliberately. The trade-off:**
+
+- **64 KB and below** — fast, low memory, but rejects real on-chain
+  deploys. The GLYPH (Radiant Blockchain Glyph Protocol) deploy
+  reveal carries a 65,569-byte CBOR body including a PNG logo.
+  Wallets capped at 64 KB cannot decode it.
+- **256 KB** — recommended ceiling. Accepts every known mainnet
+  deploy with embedded media, and bounds decode time and memory
+  to sub-millisecond cost on any reasonable CBOR library.
+- **Above 256 KB** — increases DoS surface for no observed benefit.
+  No mainnet Glyph payload approaches this size; the ecosystem
+  convention is to put large media in IPFS via the `loc` field, not
+  inline in `main.b`.
+
+**Reference enforcement (Python):**
+
+```python
+_MAX_CBOR_PAYLOAD_BYTES = 262_144  # 256 KB — accommodates GLYPH-class deploys
+
+def decode_payload(cbor_bytes: bytes):
+    if len(cbor_bytes) > _MAX_CBOR_PAYLOAD_BYTES:
+        raise ValidationError(
+            f"CBOR payload too large: {len(cbor_bytes)} > {_MAX_CBOR_PAYLOAD_BYTES}"
+        )
+    return cbor.loads(cbor_bytes)
+```
+
+Apply the cap **before** invoking the CBOR library — most CBOR
+libraries will happily allocate a multi-megabyte buffer before they
+know the structure of the input. Implementation reference: pyrxd
+`src/pyrxd/glyph/payload.py` `_MAX_CBOR_PAYLOAD_BYTES` constant and
+the size-cap precheck (lines 51, 94–95).
+
 ### Glyph Data Format
 
 ```
@@ -2150,6 +2269,63 @@ The worst outcome is a commit UTXO that sits unspent indefinitely; the RXD
 inside is not burned, just locked behind a script that only a correctly-
 built reveal can satisfy.
 
+### Finding the Reveal Tx on Chain (Don't Trust Scripthash History Alone)
+
+If you're walking from a commit txid to its reveal — to recover from a
+failed broadcast, to index your own NFTs, or to verify a third-party
+mint — **do not pick the first non-commit entry in the commit-output's
+scripthash history**. The commit hashlock script is deterministic in
+`(payload_hash, owner_pkh)`; if the same CBOR body was committed in a
+prior failed attempt by the same owner, both attempts share the
+identical script bytes and the identical scripthash. Indexer history
+returns all of them in chronological order, not just yours.
+
+The Glyph Protocol deploy commit's vout-0 scripthash on Radiant mainnet,
+for example, has **four** history entries:
+
+```
+height  txid                                       what it is
+228398  d171b184…1597   ← earlier failed deploy attempt (same script bytes)
+228398  6de766d7…3eaf   ← refund spending d171b184:0
+228604  a443d9df…878b   ← the real deploy commit
+228604  b965b32d…9dd6   ← the real deploy reveal
+```
+
+A walker that does `history[0] if history[0] != commit_txid else
+history[1]` picks `d171b184…1597` — wrong tx, wrong outputs, your
+indexing pipeline either fails loudly or (worse) silently
+mis-attributes the token.
+
+**Correct disambiguation:** among history candidates, pick the tx
+whose inputs actually spend `commit_txid:vout`. The real reveal is
+the only candidate that does:
+
+```javascript
+async function findReveal(electrum, commitTxid, commitVout) {
+    const scripthash = scriptHashOf(commitOutputScript);
+    const history = await electrum.scripthashGetHistory(scripthash);
+    for (const entry of history) {
+        if (entry.tx_hash === commitTxid) continue;
+        const tx = await electrum.transactionGet(entry.tx_hash);
+        const spendsCommit = tx.vin.some(
+            i => i.txid === commitTxid && i.vout === commitVout
+        );
+        if (spendsCommit) return entry.tx_hash;
+    }
+    throw new Error('no tx in scripthash history spends commit outpoint');
+}
+```
+
+The extra `transactionGet` per candidate costs one round-trip each.
+Real candidate sets are tiny (1–3 typically), and you were going to
+fetch the reveal tx anyway. The cost is negligible compared to
+mis-attributing a token.
+
+**Same principle applies in reverse:** any "which tx spent this UTXO?"
+query against indexer scripthash history is coarse-grained. Confirm
+the candidate's inputs include your specific outpoint before
+trusting the answer.
+
 ---
 
 ## Reveal Transaction
@@ -2169,7 +2345,7 @@ The scriptSig must be in this **exact order**:
 <signature> <pubkey> <"gly" marker> <CBOR payload>
 ```
 
-### Sizing the CBOR push correctly
+### Sizing the CBOR push correctly (builder side)
 
 The reveal scriptSig embeds the CBOR payload in this push sequence:
 
@@ -2192,6 +2368,65 @@ need `OP_PUSHDATA2` or `OP_PUSHDATA4`. The GLYPH deploy used
 silently truncates the body in a length-1 push (the high bytes become
 "dust opcodes" on the stack) and the reveal fails the locking-side
 `OP_HASH256 <32-byte payload-hash> OP_EQUALVERIFY` check.
+
+### Push-Stack Walker Must Handle OP_PUSHDATA4 (0x4e)
+
+Any wallet, explorer, or builder that walks the reveal scriptSig push
+stack — to find the `'gly'` marker and the CBOR body that follows it
+— must support all four push-data opcodes. V1 dMint deploys with
+embedded media (the GLYPH token's deploy carries a 65,569-byte CBOR
+body including a PNG logo) overflow `OP_PUSHDATA2`'s 65,535-byte max
+length and use `OP_PUSHDATA4` (`0x4e`). A walker that handles only
+`0x01`–`0x4d` silently terminates at the `0x4e` byte, never finds the
+`'gly'` marker, and classifies the entire reveal as "no Glyph metadata."
+
+Reveal scriptSig push stacks may use any of four push-data opcodes:
+
+| Opcode | Hex  | Length encoding                | Max push size |
+|--------|------|--------------------------------|---------------|
+| direct | `0x01`–`0x4b` | opcode IS the length | 75 bytes     |
+| OP_PUSHDATA1 | `0x4c` | next 1 byte               | 255 bytes    |
+| OP_PUSHDATA2 | `0x4d` | next 2 bytes (LE)         | 65,535 bytes |
+| OP_PUSHDATA4 | `0x4e` | next 4 bytes (LE)         | 2³² – 1      |
+
+**V1 dMint deploys with embedded media use `OP_PUSHDATA4`.** The
+GLYPH (Radiant Blockchain Glyph Protocol) deploy reveal carries a
+65,569-byte CBOR body (including a PNG logo) in its input-0 scriptSig
+— above `OP_PUSHDATA2`'s 65,535-byte ceiling, so the script emits
+`0x4e` and a 4-byte little-endian length. Wallets that handle only
+`0x4c`/`0x4d` terminate the walk at the `0x4e` byte, never find the
+`'gly'` marker that follows, and silently report the reveal as a
+non-Glyph tx.
+
+**Reference walker (Python, mirrors the four push opcodes):**
+
+```python
+def walk_pushes(scriptsig: bytes) -> list[bytes]:
+    items, pos = [], 0
+    while pos < len(scriptsig):
+        op = scriptsig[pos]; pos += 1
+        if 0x01 <= op <= 0x4B:
+            items.append(scriptsig[pos:pos+op]); pos += op
+        elif op == 0x4C:
+            length = scriptsig[pos]; pos += 1
+            items.append(scriptsig[pos:pos+length]); pos += length
+        elif op == 0x4D:
+            length = int.from_bytes(scriptsig[pos:pos+2], "little"); pos += 2
+            items.append(scriptsig[pos:pos+length]); pos += length
+        elif op == 0x4E:
+            length = int.from_bytes(scriptsig[pos:pos+4], "little"); pos += 4
+            items.append(scriptsig[pos:pos+length]); pos += length
+        else:
+            break  # non-push opcode — stop walking the push stack
+    return items
+```
+
+A correct walker on the GLYPH deploy reveal produces a push-stack
+whose item-2 is `676c79` (the `'gly'` marker) and whose item-3 is the
+65,569-byte CBOR body. The `'gly'` marker convention always: marker
+push immediately followed by CBOR-body push. Implementation reference:
+pyrxd `src/pyrxd/glyph/inspector.py` `_parse_reveal_scriptsig` (lines
+164–203).
 
 ### Singleton Output Script
 
@@ -2620,6 +2855,53 @@ are present.
 
 ---
 
+## Validating Your Builder Against Mainnet
+
+**Synthetic tests alone cannot validate a wire-format builder.** If your
+test suite only round-trips your own builder through your own parser
+(`assert parse(build(x)) == x`), both can harbor coordinated bugs invisible
+to every assertion — they were authored from the same flawed mental
+model. A real example: a recent Radiant SDK shipped a complete green V1
+dMint mint-tx builder that produced outputs the mainnet covenant rejects
+100% of the time. 49 unit tests passed. The bug was caught by manually
+walking mainnet bytes against the builder's output.
+
+Before broadcasting any Glyph/FT/dMint transaction from new builder
+code, run at least one **golden-vector** assertion: byte-equal your
+builder's output against captured mainnet bytes for a known-good
+transaction.
+
+### Mainnet golden vectors
+
+| What | Reference txid | What to compare |
+|------|---------------|-----------------|
+| Glyph NFT reveal w/ on-chain thumbnail | `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e` | scriptSig push stack (`<sig> <pubkey> <preimage with gly+CBOR>`) and the 63-byte singleton output |
+| V1 dMint deploy commit + reveal (GLYPH token) | commit `a443d9df469692306f7a2566536b19ed7909d8bf264f5a01f5a9b171c7c3878b` / reveal `b965b32dba8628c339bc39a3369d0c46d645a77828aeb941904c77323bb99dd6` | 75-byte FT-commit hashlock script; 32 × 241-byte V1 contract output scripts |
+| V1 dMint mint-tx reward output (RBG GLYPH) | `146a4d68…f3c` vout[1] (75 bytes: `76 a9 14 <miner_pkh> 88ac bd d0 <token_ref> dec0e9aa76e378e4a269e69d`) | reward-output script byte-equal |
+| Live RBG dMint reveal w/ 10 V1 contracts | `c5c296ebff5869c6e2b208ce0cd04be479a9f10d33cf73608f0a5efc2d6b55b6` | classifier coverage on vouts 0–13 (10 dMint, 1 FT, 2 NFT, 1 P2PKH) |
+
+### Required test pattern
+
+For every new output your builder produces:
+
+1. Capture the raw script hex from a mainnet RPC query
+   (`getrawtransaction <txid> 1` then walk `vout[].scriptPubKey.hex`).
+2. Pin the bytes as a constant in your test file with a comment naming
+   the source txid and vout index.
+3. Write a `test_byte_equal_to_mainnet_<vout>` assertion that runs your
+   builder with the same params and `assert build(...) == GOLDEN`.
+4. Run the golden-vector test first, before any round-trip test, in
+   your CI matrix. A round-trip green + golden red means the bug is
+   in your shared mental model, not at the boundary.
+
+If you cannot find a real mainnet instance of the format you're
+building, you are either targeting a future protocol version (mark
+it experimental and gate it behind an explicit opt-in flag — see "V2
+dMint footgun" below) or implementing a format that was never deployed
+(a trap; revisit your spec source).
+
+---
+
 ## Common Errors & Solutions
 
 ### Environment & Infrastructure
@@ -2753,6 +3035,12 @@ Classifier Patterns" section above + the reference implementation in
 
 Same pattern applies to NFT singletons (63 bytes) — see the classifier table.
 
+**Related defense:** if you're writing the wallet itself, the inverse
+bug — *recognizing* an FT/NFT UTXO and then spending it as plain
+funding — silently burns the token. See "Token-Burn Defense: Coin
+Selection Must Reject Token-Bearing UTXOs" under the Wallet
+Classifier Patterns section.
+
 #### "Trying to spend a 241-byte FT control output — fails at consensus"
 
 **Cause:** The wallet classified the 241-byte FT mint-authority script as a
@@ -2791,6 +3079,13 @@ payload.main = {
 2. Load BEFORE blockchain scripts in HTML
 3. Verify: `console.log(typeof CBOR)` should output "object"
 4. Mint new NFT (old one cannot be fixed)
+
+**Related decode bugs:** if metadata decoding TypeErrors on
+`main.b`, your decoder is not unwrapping CBORTag 64 — see
+"Decoding `main.b`: Handle CBORTag 64". If the walker terminates
+before finding the `'gly'` marker on a reveal with embedded media
+(>64 KB), it's missing OP_PUSHDATA4 support — see "Push-Stack
+Walker Must Handle OP_PUSHDATA4".
 
 #### "Extra items left on stack after execution"
 
@@ -2880,6 +3175,10 @@ const correctRef = script.substring(2, 74);  // Skip 'd8', take next 72 chars
 1. Check your container ref matches the value in the output script (starts at position 2)
 2. Child NFTs should use this exact ref in their `in` field
 3. In Glyphium, click the container - children should be listed
+
+**For dMint-specific issues** (deploy walk returns wrong tx, V1/V2
+confusion, V1 mint funding rejected) see the corresponding sections
+under Security Best Practices and What's New in V2.
 
 ---
 
@@ -3095,7 +3394,9 @@ Import your wallet and check:
 These are the canonical golden vectors for any V1 dMint deploy implementation.
 Use them as the "chain is the oracle" test: your deploy reveal's vout 0 should be
 byte-identical to the GLYPH reveal's vout 0 after substituting your deployer PKH
-and commit txid.
+and commit txid. For additional golden-vector txids covering V1 dMint mint and
+classifier coverage on live RBG dMint reveals, see [Validating Your Builder
+Against Mainnet](#validating-your-builder-against-mainnet).
 
 ---
 
@@ -3283,6 +3584,74 @@ Before any blockchain operation:
 - [ ] Radiant addresses validated via RPC `validateaddress`
 - [ ] All user inputs sanitized before passing to shell commands
 
+### Error Message Hygiene: Don't Log Key Material
+
+Every error path that interpolates a user-supplied value is a key-leak
+risk. Common offenders:
+
+- `throw new Error("Invalid WIF: " + wif)` — leaks the private key into stack traces.
+- `console.log("signing tx:", rawTx)` where `rawTx` includes a debug
+  preimage push of a privkey.
+- `logger.exception()` over a function whose `args` include a WIF/mnemonic
+  passed for diagnostic context.
+- Crash-report telemetry that uploads the full exception message.
+
+**Defensive pattern:** wrap any error message that touches a
+caller-supplied value in a redaction helper. Long base58/hex strings
+and BIP-39 mnemonics get replaced with `<redacted>` before the message
+crosses any logging boundary.
+
+```python
+import re
+
+_HEX_OR_B58 = re.compile(r"^[A-Za-z0-9+/=]{20,}$")
+
+def redact(value):
+    if isinstance(value, bytes) and len(value) > 8:
+        return f"<redacted:{len(value)}b>"
+    if isinstance(value, str) and len(value) > 8:
+        # BIP-39 mnemonic heuristic: >=8 space-separated ASCII lowercase tokens
+        tokens = value.split()
+        is_mnemonic = (len(tokens) >= 8 and
+                       all(t.isascii() and t.isalpha() and t.islower() for t in tokens))
+        if is_mnemonic or _HEX_OR_B58.match(value):
+            return "<redacted>"
+    return value
+
+class WalletError(Exception):
+    def __init__(self, *args):
+        super().__init__(*(redact(a) for a in args))
+
+# Usage — caller-supplied values pass through redaction automatically:
+raise WalletError("invalid WIF", user_input_wif)
+# Logged message: "invalid WIF <redacted>"
+```
+
+```javascript
+function redact(v) {
+    if (typeof v === 'string' && v.length > 8) {
+        // BIP-39 mnemonic
+        const tokens = v.split(/\s+/);
+        if (tokens.length >= 8 && tokens.every(t => /^[a-z]+$/.test(t))) return '<redacted>';
+        // Long hex / base58 / base64
+        if (/^[A-Za-z0-9+/=]{20,}$/.test(v)) return '<redacted>';
+    }
+    if (v instanceof Uint8Array && v.length > 8) return `<redacted:${v.length}b>`;
+    return v;
+}
+```
+
+Apply at the boundary, not at the call site — defenders should not
+have to remember `redact()` at every `throw`. Have a single error
+base class that runs redaction in its constructor. New code that
+inherits the base class gets the defense for free.
+
+**Specifically: never include the WIF, private key, mnemonic, or seed
+phrase in any error message string.** Use a static description
+(`invalid WIF format`); for diagnostics, log a structural hint
+(`expected 52-char base58, got 31 chars`) instead of the value
+itself.
+
 ---
 
 ## What's New in V2
@@ -3324,6 +3693,39 @@ See Fee Calculations & Cost Analysis for the post-V2 cost tables.
   the warning that Photonic-master ships V2-only emitters. For V2-only algorithm
   and DAA mode parameters, see the [Radiant AI Knowledge Base](https://github.com/Radiant-Core/radiant-mcp-server/blob/master/docs/RADIANT_AI_KNOWLEDGE_BASE.md).
 - **WAVE** — On-chain naming system. Protocol 11. Provides human-readable addresses and DNS-like records.
+
+### Footgun: V2 dMint Deploys Have No Miners (Use V1)
+
+V2 dMint exists in the protocol spec but is **not** the version live on
+mainnet. As of May 2026, every dMint contract observable on Radiant
+mainnet — the entire ecosystem — is V1. No ecosystem miner targets V2.
+Indexer (RXinDexer) behavior on V2 deploys is empirically undefined.
+Deploying a V2 dMint today produces a token nobody can mine: the
+contract sits on chain forever, the premise of mineable distribution
+silently breaks, no error is raised.
+
+**Pattern your deploy code should adopt:**
+
+```python
+def prepare_dmint_deploy(params, *, allow_v2_deploy: bool = False):
+    if params.version == 2 and not allow_v2_deploy:
+        raise DmintError(
+            "V2 dMint deploys have no ecosystem miner and indexer "
+            "behavior is undefined. Refusing to build a token nobody "
+            "can mine. For V1 (the only live mainnet format), pass "
+            "DmintV1DeployParams. To deploy V2 anyway (e.g. SDK "
+            "testing), pass allow_v2_deploy=True."
+        )
+    ...
+```
+
+This is a footgun-mitigation pattern: V2 may become the live format
+later, but the deploy is irreversible. An explicit opt-in flag forces
+the caller to confirm they understand the consequence at the call
+site, not in a README.
+
+See [Decentralized Mint (dMint)](#decentralized-mint-dmint) for the
+canonical V1 deploy shape.
 
 ---
 
