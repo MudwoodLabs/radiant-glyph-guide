@@ -14,7 +14,7 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
 > **FOR AI AGENTS — Start Here:**
 > - **First NFT mint?** → Read sections 2 (Critical Requirements), 5 (On-Chain Images), 9 (CBOR Payload), then 10-12 (Commit/Reveal/Signing)
 > - **First FT integration?** → Read section 7 (Fungible Tokens) for the 75-byte template + wallet classifier patterns
-> - **First dMint deploy or mint?** → Read section 8 (Decentralized Mint) for the V1 contract layout, deploy commit/reveal shape, and Photonic-master divergences
+> - **First dMint deploy or mint?** → Read [section 8 (Decentralized Mint)](#decentralized-mint-dmint) for the V1 contract layout, deploy commit/reveal shape, and Photonic-master divergences. See also the [byte-decoded GLYPH reference deploy](#verified-working-transactions-january-2026).
 > - **Debugging a failed mint?** → Jump to section 15 (Common Errors) and the Appendix (opcodes, hex values)
 > - **Upgrading to V2?** → Read section 19 (What's New in V2) and the Fee Calculations section for updated costs
 > - **Hardware wallet (Ledger) support?** → See [`radiant-ledger-guide`](https://github.com/Zyrtnin-org/radiant-ledger-guide). Minting still requires software signing; receiving + spending Glyph UTXOs works with the community Ledger app
@@ -38,6 +38,11 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
    - [FT Holder Template (75 bytes)](#ft-holder-template-75-bytes)
    - [Wallet Classifier Patterns](#wallet-classifier-patterns)
 8. [Decentralized Mint (dMint)](#decentralized-mint-dmint)
+   - [Commit tx layout (verified GLYPH deploy)](#commit-tx-layout-verified-glyph-deploy)
+   - [Reveal tx layout and heterogeneous inputs](#reveal-tx-layout-and-heterogeneous-inputs)
+   - [V1 vs V2 CBOR distinction](#v1-vs-v2-cbor-distinction)
+   - [Auth NFT: fresh-mint vs forward-prior](#auth-nft-fresh-mint-vs-forward-prior)
+   - [Known gotchas](#dmint-deploy-known-gotchas)
 9. [CBOR Payload Format](#cbor-payload-format)
 10. [Commit Transaction](#commit-transaction)
 11. [Reveal Transaction](#reveal-transaction)
@@ -1212,6 +1217,14 @@ to users as spendable outputs.
 
 Reference implementation: [`classifier.mjs`](https://github.com/Zyrtnin-org/radiant-ledger-app/blob/main/view-only-ui/classifier.mjs) (pure ES module, 83 lines, no dependencies).
 
+**dMint contract outputs** (241 bytes, V1 shape) do not match any of the three patterns above
+and will classify as `unknown`. This is correct for wallet display — they are not user-spendable.
+However, an explorer or dMint-aware tool must NOT silently discard them. Detect them by parsing
+the script as an opcode stream and looking for `OP_STATESEPARATOR` (`0xbd`) at byte 96 (preceded
+by exactly 6 state-item pushes in V1, or 10 in V2). A bare-byte search for `0xbd` is NOT
+sufficient — the byte can appear in push-data payloads. See [§8 — Decentralized Mint](#decentralized-mint-dmint)
+for the V1/V2 dispatch logic and the canonical opcode walker below.
+
 ### Opcode-aware classification (mandatory)
 
 Bitcoin/Radiant scripts are an **opcode stream** where push opcodes are
@@ -1342,6 +1355,11 @@ output script given a validated `(pkh, ref)` pair.
 ---
 
 ## Decentralized Mint (dMint)
+
+> **AI agents:** this section covers deploying a new mineable FT token (protocol `p: [1, 4]`).
+> It is NOT the mint path (claiming tokens from an existing contract). For the single-contract
+> mint flow, see the FT Holder Template above and the pyrxd `build_dmint_v1_mint_tx`
+> reference implementation.
 
 dMint is a Glyph protocol extension (`p: [1, 4]`) that distributes a
 fungible token via on-chain Proof-of-Work mining instead of a single
@@ -1581,6 +1599,38 @@ Reference implementation:
 scripthash queries are coarse; you must filter by outpoint — applies to
 any "find the spending tx" pattern over scripthash history.
 
+#### Known gotchas {#dmint-deploy-known-gotchas}
+
+See also: [§14 Common Errors](#common-errors--solutions) and
+[§7 — Wallet Classifier Patterns](#wallet-classifier-patterns).
+
+1. **V1 contract outputs classify as `unknown` in V2-only parsers.** The on-chain V1 contract
+   script has 6 state items before `OP_STATESEPARATOR` (`0xbd`), not 10. Any parser that expects
+   10 state pushes (the V2 layout) will fail at item 6 and discard the output. A correct parser
+   tries V2 first, falls back to V1, and signals which version was matched. (See protocol-review
+   for details; compound doc: `dmint-v1-classifier-gap.md`.)
+
+2. **V1 mint reward output is NOT a plain P2PKH.** The V1 covenant requires a 75-byte
+   FT-wrapped reward output (`P2PKH prologue + OP_STATESEPARATOR + OP_PUSHINPUTREF tokenRef +
+   12-byte epilogue`). Plain P2PKH reward outputs will be rejected by the covenant. The contract
+   output value must stay constant (singleton — typically 1 photon); the miner funds the reward
+   and fee from a separate plain-RXD input. (Compound doc: `dmint-v1-mint-shape-mismatch.md`.)
+
+3. **Bare-byte script classification rejects ~51% of honest miners.** Any check for
+   OP_PUSHINPUTREF-family opcodes (`0xd0–0xd8`) that scans the full script byte-by-byte will
+   false-positive on P2PKH addresses whose 20-byte hash contains those bytes — a ~51% hit rate
+   on random addresses. All script classification must walk the opcode stream, skipping push
+   payloads. (Compound doc: `funding-utxo-byte-scan-dos.md`.)
+
+        This is the defensive code pattern for gotcha 3. -->
+
+4. **Hashlock reuse confuses scripthash-based "find the reveal" walks.** If the same payload
+   hash and owner PKH are used in a failed earlier attempt, ElectrumX `get_history` for that
+   scripthash returns multiple entries. A naive "first non-commit tx" pick can land on the wrong
+   transaction. The correct approach: among history candidates, check which one's `vin 0` spends
+   `commit:0` of the known commit txid. (Compound doc: `dmint-deploy-reveal-hashlock-reuse.md`.)
+
+
 ---
 
 ## CBOR Payload Format
@@ -1673,8 +1723,8 @@ see below) is also effectively consensus for your mint.
 via dMint." Combinations like `[2, 7]` (NFT that is also a container) are valid. The first
 element is the primary type; subsequent elements are modifiers. `p: [4]` alone (dMint
 without an FT or NFT base type) has not been observed on mainnet — all known dMint
-deployments use `[1, 4]` (FT + dMint). Treat a bare `[4]` as unusual; it may be valid
-per protocol but has no real-world precedent to verify against.
+deployments use `[1, 4]` (FT + dMint). For the full commit/reveal structure of a V1 `[1, 4]`
+deploy, see [§7 — dMint V1 Deploy](#dmint-v1-deploy-multi-contract-structure).
 
 **V1 vs V2 deploys differ in the CBOR shape itself.** V1 (the only
 on-chain reality so far) emits `p: [1, 4]` with no `v` field and no
@@ -3028,6 +3078,25 @@ Import your wallet and check:
 - Reveal: `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e`
 - Thumbnail: 150x200, ~14KB, displays correctly in Glyphium
 
+**dMint V1 deploy (GLYPH token, height 228,604 — byte-decoded from chain):**
+- Deploy commit: `a443d9df469692306f7a2566536b19ed7909d8bf264f5a01f5a9b171c7c3878b`
+  - 35 outputs: 1 FT hashlock + 32 ref-seeds + 1 NFT hashlock + 1 change
+  - Serialized size: 1,448 bytes
+- Deploy reveal: `b965b32dba8628c339bc39a3369d0c46d645a77828aeb941904c77323bb99dd6`
+  - 36 inputs × 35 outputs; serialized size: 79,141 bytes
+  - vouts 0–31: 241-byte V1 dMint contract scripts (32 contracts)
+  - vout 32: 63-byte FT NFT singleton
+  - vout 33: 63-byte auth NFT singleton
+  - vout 34: change P2PKH
+- Token params: `numContracts=32`, `reward=50,000 photons`, `maxHeight=625,000`,
+  `target=0x00da740da740da74`, `algo=sha256d`
+- Full byte-decode: `pyrxd/docs/dmint-research-photonic-deploy.md` §§2–4
+
+These are the canonical golden vectors for any V1 dMint deploy implementation.
+Use them as the "chain is the oracle" test: your deploy reveal's vout 0 should be
+byte-identical to the GLYPH reveal's vout 0 after substituting your deployer PKH
+and commit txid.
+
 ---
 
 ## Security Best Practices
@@ -3248,10 +3317,13 @@ See Fee Calculations & Cost Analysis for the post-V2 cost tables.
 
 ### New Protocols: dMint and WAVE
 
-- **dMint** — Mineable token distribution via PoW. Protocol combination `[1, 4]`. See [Decentralized Mint (dMint)](#decentralized-mint-dmint) for the full V1 contract layout, deploy commit/reveal shapes, CBOR schema, and the warning that Photonic-master ships V2-only emitters.
+- **dMint** — Mineable token distribution via PoW. Protocol combination `[1, 4]`.
+  Three active mining algorithms: SHA256D (`0xaa`), BLAKE3 (`0xee`), K12 (`0xef`),
+  though only SHA256D appears on mainnet today. See [Decentralized Mint (dMint)](#decentralized-mint-dmint)
+  for the full V1 contract layout, deploy commit/reveal shapes, CBOR schema, and
+  the warning that Photonic-master ships V2-only emitters. For V2-only algorithm
+  and DAA mode parameters, see the [Radiant AI Knowledge Base](https://github.com/Radiant-Core/radiant-mcp-server/blob/master/docs/RADIANT_AI_KNOWLEDGE_BASE.md).
 - **WAVE** — On-chain naming system. Protocol 11. Provides human-readable addresses and DNS-like records.
-
-See the [Radiant AI Knowledge Base](https://github.com/Radiant-Core/radiant-mcp-server/blob/master/docs/RADIANT_AI_KNOWLEDGE_BASE.md) for implementation details.
 
 ---
 
@@ -3368,7 +3440,7 @@ and tracks documentation evolution.
 
 | Date | Commit range | Summary |
 |---|---|---|
-| 2026-05-10 | (this commit) | Major dMint expansion: new top-level "Decentralized Mint (dMint)" section with V1 contract byte layout (state 96B + epilogue 145B = 241B), deploy commit/reveal shape (N+3 outputs each), V1 CBOR schema (`p:[1,4]`, no `v`), warning that Photonic-master ships V2-only emitters, opcode-aware classification rule + canonical walker, token-burn defense for funding-input selection, scripthash-history disambiguation pattern, PUSHDATA4 sizing rule for large CBOR bodies. Anchored with GLYPH deploy commit `a443d9df…878b` and reveal `b965b32d…9dd6`. Corrected mis-labeling of dMint contract UTXOs as "FT control / mint-authority." Based on pyrxd M1+M2 byte-by-byte research (`dmint-research-mainnet.md`, `dmint-research-photonic-deploy.md`). |
+| 2026-05-10 | (this commit) | Major dMint expansion: new top-level §8 "Decentralized Mint (dMint)" section with V1 contract byte layout (state 96B + epilogue 145B = 241B), deploy commit/reveal shape (N+3 outputs each), V1 CBOR schema (`p:[1,4]`, no `v`), warning that Photonic-master ships V2-only emitters, opcode-aware classification rule + canonical walker, token-burn defense for funding-input selection, scripthash-history disambiguation pattern, PUSHDATA4 sizing rule for large CBOR bodies, "Known gotchas" subsection covering the four pyrxd compound-doc findings (classifier gap, mint-shape mismatch, hashlock reuse, byte-scan DoS). Anchored with GLYPH deploy commit `a443d9df…878b` and reveal `b965b32d…9dd6`, both added to Verified Working Transactions. Added "First dMint deploy or mint?" routing to FOR AI AGENTS block. Replaced the §19 dMint stub with an in-guide cross-reference. Corrected mis-labeling of dMint contract UTXOs as "FT control / mint-authority." Based on pyrxd M1+M2 byte-by-byte research (`dmint-research-mainnet.md`, `dmint-research-photonic-deploy.md`). |
 | 2026-04-17 | (prior) | Added MUST-vs-SHOULD tier table for CBOR fields, cross-language regex note for wallet classifiers, multi-library CBOR ecosystem warning, alternative IPFS provider options, CID validation in `uploadFileToPinata`, Changelog section. |
 | 2026-04-17 | `4a9d87d` | Ultrathink review fixes: tx-output validation gate (integer math), radiantjs SHA pin, Radiant Core tarball verification, PINATA_GATEWAY hostname allow-list, `loc_hash` field, `proc_terminate` fallback on signing timeout, MCP guide WIF hardening. Recovery walkthroughs (regtest funding, failed-reveal recovery). FT ref construction by copy-from-existing-UTXO. Anchored 63-byte NFT regex. CBOR attrs restricted to string-keyed primitives. Disclaimer + Ledger-app unaudited note. |
 | 2026-04-16 | `63da546`, `08d623d`, `b2a496b` | Repo renamed to `radiant-glyph-guide`. Section-numbering fixes, scriptSig order corrections, thumbnail-size tradeoff table. Reviewer fixes: precision language, glossary, PII review, FT epilogue opcode decode. |
@@ -3381,3 +3453,4 @@ and tracks documentation evolution.
 - **Glyph protocol addition** (new opcode, new protocol ID, new required CBOR field): audit sections 5 (On-Chain Images), 7 (Fungible Tokens), 8 (CBOR Payload Format), 14 (Common Errors).
 - **Pinata/IPFS API change**: audit `uploadFileToPinata` and the IPFS Integration section.
 - **Electron-Wallet / Ledger firmware update**: audit the Hardware Wallet pointer and [`radiant-ledger-guide`](https://github.com/Zyrtnin-org/radiant-ledger-guide) cross-reference.
+- **First mainnet V2 dMint deploy**: update §7 dMint section with V2 contract layout, update Verified Working Transactions, and add a V2 row to the V1/V2 CBOR distinction table.

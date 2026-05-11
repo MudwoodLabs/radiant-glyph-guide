@@ -517,6 +517,16 @@ function encodeGlyphData(data) {
 }
 ```
 
+### dMint V1 Deploy
+
+A V1 deploy is a multi-contract, heterogeneous-input transaction
+significantly more complex than a standard NFT mint. Read [§7 — dMint V1 Deploy in README.md](README.md#dmint-v1-deploy-multi-contract-structure)
+before prompting Claude to build one. The four gotchas documented there (classifier gap,
+mint-shape mismatch, hashlock-reuse, byte-scan DoS) were each caught only by comparing
+pyrxd's output byte-for-byte against the on-chain GLYPH deploy — not by unit tests alone.
+When prompting Claude on dMint deploy code, paste the relevant "Known gotchas" block from
+README.md into the same context window.
+
 ---
 
 ## Critical Gotchas
