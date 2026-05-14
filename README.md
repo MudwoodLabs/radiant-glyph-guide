@@ -5,7 +5,7 @@
 > **Guide version:** see the [Changelog](#changelog) at the bottom.
 > **Protocol baseline:** Radiant V2 (block 410,000) + post-V2 fees (block 415,000).
 > **Last on-chain verification:** see the [Verified Working Transactions](#verified-working-transactions-january-2026) section for mainnet txids that back the claims in this document.
-> **Integrity (read BEFORE pasting into an AI agent):** the canonical source is `Zyrtnin-org/radiant-glyph-guide` on GitHub. Before pasting into an agent session that has file-write or network access, clone the repo (`git clone https://github.com/Zyrtnin-org/radiant-glyph-guide`), run `git log --oneline` to see the commit history, and diff the current `README.md` against an earlier commit you recognize (e.g. `git diff <known-good-commit>..HEAD README.md`). A compromised fork or a commit injected by an attacker could add instructions that exfiltrate keys or insert backdoors into signing code — and you will not see the injection just by reading the rendered markdown.
+> **Integrity (read BEFORE pasting into an AI agent):** the canonical source is `MudwoodLabs/radiant-glyph-guide` on GitHub. Before pasting into an agent session that has file-write or network access, clone the repo (`git clone https://github.com/MudwoodLabs/radiant-glyph-guide`), run `git log --oneline` to see the commit history, and diff the current `README.md` against an earlier commit you recognize (e.g. `git diff <known-good-commit>..HEAD README.md`). A compromised fork or a commit injected by an attacker could add instructions that exfiltrate keys or insert backdoors into signing code — and you will not see the injection just by reading the rendered markdown.
 
 This guide provides everything you need to implement Glyph assets on the Radiant blockchain, updated for **V2** (block 410,000+). It covers all three asset classes the Glyph protocol supports — **NFTs** (commit/reveal singletons), **Fungible Tokens (FTs)** (the 75-byte holder template + wallet classifiers), and **Decentralized Mint (dMint)** (the V1 PoW mint covenant) — plus critical discoveries from real-world implementation, all 11 Glyph protocol types, V2 opcode reference, and updated fee calculations for the post-V2 fee increase.
 
@@ -17,7 +17,7 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
 > - **First dMint deploy or mint?** → Read [section 8 (Decentralized Mint)](#decentralized-mint-dmint) for the V1 contract layout, deploy commit/reveal shape, [V1 mint tx mechanics](#v1-mint-tx-mechanics-mainnet-verified) (4-output shape, 72-byte mint scriptSig, PoW preimage layout), and Photonic-master divergences. See also the [byte-decoded GLYPH reference deploy and snk/PXD mint txs](#verified-working-transactions-january-2026).
 > - **Debugging a failed mint?** → Jump to section 15 (Common Errors) and the Appendix (opcodes, hex values)
 > - **Upgrading to V2?** → Read section 19 (What's New in V2) and the Fee Calculations section for updated costs
-> - **Hardware wallet (Ledger) support?** → See [`radiant-ledger-guide`](https://github.com/Zyrtnin-org/radiant-ledger-guide). Minting still requires software signing; receiving + spending Glyph UTXOs works with the community Ledger app
+> - **Hardware wallet (Ledger) support?** → See [`radiant-ledger-guide`](https://github.com/MudwoodLabs/radiant-ledger-guide). Minting still requires software signing; receiving + spending Glyph UTXOs works with the community Ledger app
 > - **Using Claude with MCP?** → See [BUILDING_WITH_CLAUDE.md](BUILDING_WITH_CLAUDE.md) for MCP setup and workflow tips
 
 ---
@@ -1196,7 +1196,7 @@ manipulation, comparison, hashing — e.g. `76 = OP_DUP`, `a2 = OP_GREATERTHANOR
 `aa`, `78`) that feed the state-aware values into the comparison. Calling
 them "standard Bitcoin" would be misleading — several are Radiant additions.
 Together they wire the two sums into the conservation check. A full opcode-by-opcode decode is available in
-[`radiant-ledger-app/docs/solutions/integration-issues/radiant-glyph-ft-template-and-view-only-renderer.md`](https://github.com/Zyrtnin-org/radiant-ledger-app) — for this guide, the important
+[`radiant-ledger-app/docs/solutions/integration-issues/radiant-glyph-ft-template-and-view-only-renderer.md`](https://github.com/MudwoodLabs/radiant-ledger-app) — for this guide, the important
 takeaway is that together they enforce **Σ input photons ≥ Σ output photons**
 per codeScript hash — tokens cannot be inflated by a normal spend. Only the
 mint-authority script (241 bytes, not documented here) can create new supply.
@@ -1275,7 +1275,7 @@ Key differences from NFT CBOR:
 For wallet developers integrating Glyph support — three regex patterns
 that classify every mainnet-observed spendable script shape. Tested against
 13 golden vectors from real mainnet (2,309 samples, 6 tokens, 500 blocks)
-in [`radiant-ledger-app/view-only-ui/fixtures/classifier-vectors.json`](https://github.com/Zyrtnin-org/radiant-ledger-app).
+in [`radiant-ledger-app/view-only-ui/fixtures/classifier-vectors.json`](https://github.com/MudwoodLabs/radiant-ledger-app).
 
 ```
 Plain P2PKH (25B):   ^76a914[0-9a-f]{40}88ac$
@@ -1302,7 +1302,7 @@ The 241-byte FT control/authority scripts intentionally do NOT match any of
 these patterns — they correctly classify as `unknown` and should not be surfaced
 to users as spendable outputs.
 
-Reference implementation: [`classifier.mjs`](https://github.com/Zyrtnin-org/radiant-ledger-app/blob/main/view-only-ui/classifier.mjs) (pure ES module, 83 lines, no dependencies).
+Reference implementation: [`classifier.mjs`](https://github.com/MudwoodLabs/radiant-ledger-app/blob/main/view-only-ui/classifier.mjs) (pure ES module, 83 lines, no dependencies).
 
 **dMint contract outputs** (241 bytes, V1 shape) do not match any of the three patterns above
 and will classify as `unknown`. This is correct for wallet display — they are not user-spendable.
@@ -2724,7 +2724,7 @@ Glyph **receiving and spending**, however, does work with the community-built Ra
 - Mint a Glyph with software signing and send the output to a Ledger-derived address (`m/44'/512'/0'/0/x`)
 - Later spend that Glyph UTXO with a Ledger-signed transaction (the unlocking side is standard P2PKH)
 
-See [`radiant-ledger-guide`](https://github.com/Zyrtnin-org/radiant-ledger-guide) for installation, wallet pairing, and the direct-APDU harness needed for spending Glyph UTXOs (Electron Radiant's GUI doesn't yet recognize Glyph-prefixed P2PKH as spendable — see section 6 of that guide).
+See [`radiant-ledger-guide`](https://github.com/MudwoodLabs/radiant-ledger-guide) for installation, wallet pairing, and the direct-APDU harness needed for spending Glyph UTXOs (Electron Radiant's GUI doesn't yet recognize Glyph-prefixed P2PKH as spendable — see section 6 of that guide).
 
 First Ledger-signed Glyph UTXO spend confirmed on mainnet: [`22d4e0e07200437791b48651125a636b994593b215152241aef7113b24b71da3`](https://explorer.radiantblockchain.org/tx/22d4e0e07200437791b48651125a636b994593b215152241aef7113b24b71da3).
 
@@ -3180,7 +3180,7 @@ address.
 On match, extract `pkh` at positions `[6:46]` and `ref` at `[54:126]`. Group FT
 UTXOs by ref and sum photon values for per-token balance. See the "Wallet
 Classifier Patterns" section above + the reference implementation in
-[`classifier.mjs`](https://github.com/Zyrtnin-org/radiant-ledger-app/blob/main/view-only-ui/classifier.mjs).
+[`classifier.mjs`](https://github.com/MudwoodLabs/radiant-ledger-app/blob/main/view-only-ui/classifier.mjs).
 
 Same pattern applies to NFT singletons (63 bytes) — see the classifier table.
 
@@ -4025,5 +4025,5 @@ and tracks documentation evolution.
 - **Radiant Core release**: re-run the Verified Working Transactions section against the new version.
 - **Glyph protocol addition** (new opcode, new protocol ID, new required CBOR field): audit sections 5 (On-Chain Images), 7 (Fungible Tokens), 8 (CBOR Payload Format), 14 (Common Errors).
 - **Pinata/IPFS API change**: audit `uploadFileToPinata` and the IPFS Integration section.
-- **Electron-Wallet / Ledger firmware update**: audit the Hardware Wallet pointer and [`radiant-ledger-guide`](https://github.com/Zyrtnin-org/radiant-ledger-guide) cross-reference.
+- **Electron-Wallet / Ledger firmware update**: audit the Hardware Wallet pointer and [`radiant-ledger-guide`](https://github.com/MudwoodLabs/radiant-ledger-guide) cross-reference.
 - **First mainnet V2 dMint deploy**: update §7 dMint section with V2 contract layout, update Verified Working Transactions, and add a V2 row to the V1/V2 CBOR distinction table.
