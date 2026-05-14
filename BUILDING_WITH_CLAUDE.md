@@ -1,8 +1,10 @@
-# Building NFT Applications on Radiant with Claude AI
+# Building Glyph Applications on Radiant with Claude AI
 
 **A Guide for Radiant Blockchain Developers**
 
-This document shares lessons learned from building a production NFT application on Radiant blockchain using Claude AI as a development partner. It includes practical examples, common pitfalls, and strategies for effective AI-assisted blockchain development.
+This document shares lessons learned from building production Glyph applications on Radiant blockchain using Claude AI as a development partner. It includes practical examples, common pitfalls, and strategies for effective AI-assisted blockchain development.
+
+> The hands-on narrative below is drawn from building a **Glyph NFT** minting system — that was the first asset class we shipped, so most of the war stories (blank cards, "Unknown NFT", orphaned child refs) are NFT-specific. The same commit/reveal tooling, CBOR workflow, and Claude prompting patterns carry over to **Fungible Tokens** and **dMint**; see the [dMint V1 Deploy](#dmint-v1-deploy) section and the companion [Radiant Glyph Protocol Implementation Guide](README.md) for FT- and dMint-specific coverage.
 
 ---
 
@@ -26,7 +28,7 @@ This document shares lessons learned from building a production NFT application 
 
 ## Introduction
 
-This guide documents the experience of building a complete Glyph NFT minting system on Radiant blockchain with Claude AI assistance. The result: working mainnet NFTs using the commit/reveal pattern with singleton ref technology.
+This guide documents the experience of building a complete Glyph NFT minting system on Radiant blockchain with Claude AI assistance — the first Glyph asset class we shipped. The result: working mainnet NFTs using the commit/reveal pattern with singleton ref technology. The workflow lessons apply equally to Fungible Tokens and dMint, which share the same tooling.
 
 **What We Built:**
 - Full commit/reveal NFT minting pipeline

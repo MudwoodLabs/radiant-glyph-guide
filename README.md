@@ -1,13 +1,13 @@
-# Radiant Blockchain Glyph NFT Implementation Guide
+# Radiant Glyph Protocol Implementation Guide
 
-**Complete Technical Documentation for Building NFT Applications on Radiant**
+**Complete Technical Documentation for Building Glyph Assets on Radiant — NFTs, Fungible Tokens, and Decentralized Mint (dMint)**
 
 > **Guide version:** see the [Changelog](#changelog) at the bottom.
 > **Protocol baseline:** Radiant V2 (block 410,000) + post-V2 fees (block 415,000).
 > **Last on-chain verification:** see the [Verified Working Transactions](#verified-working-transactions-january-2026) section for mainnet txids that back the claims in this document.
 > **Integrity (read BEFORE pasting into an AI agent):** the canonical source is `Zyrtnin-org/radiant-glyph-guide` on GitHub. Before pasting into an agent session that has file-write or network access, clone the repo (`git clone https://github.com/Zyrtnin-org/radiant-glyph-guide`), run `git log --oneline` to see the commit history, and diff the current `README.md` against an earlier commit you recognize (e.g. `git diff <known-good-commit>..HEAD README.md`). A compromised fork or a commit injected by an attacker could add instructions that exfiltrate keys or insert backdoors into signing code — and you will not see the injection just by reading the rendered markdown.
 
-This guide provides everything you need to implement Glyph NFTs on the Radiant blockchain, updated for **V2** (block 410,000+). It includes critical discoveries from real-world implementation, all 11 Glyph protocol types, V2 opcode reference, and updated fee calculations for the post-V2 fee increase.
+This guide provides everything you need to implement Glyph assets on the Radiant blockchain, updated for **V2** (block 410,000+). It covers all three asset classes the Glyph protocol supports — **NFTs** (commit/reveal singletons), **Fungible Tokens (FTs)** (the 75-byte holder template + wallet classifiers), and **Decentralized Mint (dMint)** (the V1 PoW mint covenant) — plus critical discoveries from real-world implementation, all 11 Glyph protocol types, V2 opcode reference, and updated fee calculations for the post-V2 fee increase.
 
 Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — paste the README into your session and start building. See [BUILDING_WITH_CLAUDE.md](BUILDING_WITH_CLAUDE.md) for MCP server setup and AI-assisted workflow tips.
 
@@ -68,15 +68,20 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
 
 ## Overview
 
-### What are Glyph NFTs?
+### What is the Glyph Protocol?
 
-Glyph NFTs are a protocol for creating non-fungible tokens on the Radiant blockchain. They support:
+Glyph is a token protocol on the Radiant blockchain. It covers three asset classes, all sharing the same CBOR payload format and commit/reveal tooling:
 
-- **True NFTs** - Transferable, unique, visible in explorers and wallets
+- **NFTs** (protocol `p:[2]`) — transferable, unique singletons. Use `OP_PUSHINPUTREFSINGLETON` for uniqueness; visible in explorers and wallets. Covered in the Overview through Reveal Transaction sections.
+- **Fungible Tokens (FTs)** (protocol `p:[1]`) — divisible token supply held in a 75-byte holder template with an `OP_STATESEPARATOR` + conservation epilogue. Covered in [section 7](#fungible-tokens-fts--the-other-half-of-glyph).
+- **Decentralized Mint (dMint)** (protocol `p:[1,4]`) — a PoW mint covenant that lets anyone mint an FT against an on-chain contract UTXO. Covered in [section 8](#decentralized-mint-dmint).
+
+Capabilities shared across asset types:
+
 - **Singleton Ref Technology** - Uses `OP_PUSHINPUTREFSINGLETON` for uniqueness
 - **CBOR Encoding** - Binary encoding for metadata (REQUIRED - see below)
-- **On-Chain Images** - Embedded thumbnails for wallet display (REQUIRED - see below)
-- **Container/Author Refs** - Organize NFTs into collections with provenance
+- **On-Chain Images** - Embedded thumbnails for wallet display (REQUIRED for NFTs - see below)
+- **Container/Author Refs** - Organize assets into collections with provenance
 
 ### Two-Transaction Pattern
 
@@ -3950,7 +3955,7 @@ See [Thumbnail Size vs Cost Tradeoffs](#thumbnail-size-vs-cost-tradeoffs) and [F
 
 ---
 
-**Last Updated:** 2026-05-11 — added V1 mint tx mechanics (4-output shape, 72-byte mint scriptSig, PoW preimage construction, `PowPreimageResult` reference API). 2026-05-10 added Decentralized Mint (dMint) section with V1 contract layout, deploy shape, CBOR schema, and chain-walking patterns. Based on byte-by-byte mainnet research from pyrxd's V1 dMint mint + deploy work. See Changelog.
+**Last Updated:** 2026-05-14 — retitled from "Radiant Blockchain Glyph NFT Implementation Guide" to "Radiant Glyph Protocol Implementation Guide": the guide now covers all three Glyph asset classes (NFTs, Fungible Tokens, dMint), so the NFT-only framing in the title, intro, and Overview was stale. 2026-05-11 added V1 mint tx mechanics (4-output shape, 72-byte mint scriptSig, PoW preimage construction, `PowPreimageResult` reference API). 2026-05-10 added Decentralized Mint (dMint) section with V1 contract layout, deploy shape, CBOR schema, and chain-walking patterns. Based on byte-by-byte mainnet research from pyrxd's V1 dMint mint + deploy work. See Changelog.
 **Based on Verified Mainnet Transactions:**
 - With thumbnail: `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e`
 
@@ -4005,7 +4010,8 @@ and tracks documentation evolution.
 
 | Date | Commit range | Summary |
 |---|---|---|
-| 2026-05-11 | (this commit, pyrxd 0.5.0 audit) | Three follow-ups from the pyrxd 0.5.0 re-audit. (1) **R3 PUSHDATA4 reveal-payload support**: confirmed the GLYPH mainnet reveal `b965b32d…9dd6` uses `OP_PUSHDATA4` (`0x4e`) to push a 65,569-byte CBOR body (over the `OP_PUSHDATA2` 65,535-byte ceiling). The recommended CBOR payload cap is **256 KB** (262,144 bytes) via PUSHDATA4 — already noted in §§8, 11, 12; this changelog row records the verification. (2) **R1 reward-shape statement strengthened**: the §8 V1-vs-V2 table now states explicitly that V2's entire 107-byte output-validation block (the FT-conservation epilogue, `_PART_C` in the pyrxd reference, equal to `_V1_EPILOGUE_SUFFIX[18:]`) is byte-identical to V1's tail — not merely the 12-byte `dec0e9aa76e378e4a269e69d` fingerprint. The whole epilogue is shared, which is what the covenant actually enforces. (3) **Second mainnet mint golden vector locked in**: PXD token mint `c9fdcd3488f3e396bec3ce0b766bb8070963e7e75bb513b8820b6663e469e530` (2026-05-11; deploy reveal `8eeb333943771991c2752abc78038365ecd76b1a24426f7a3212eea71b6a6564`) is now pinned alongside the snk mint `146a4d68…f3c` (block 422,865) as a second independent timestamp confirming the canonical V1 mint scriptSig and 4-output shape. The §8 mainnet-anchors table and §17 golden-vectors table both reference the pair; the §16 Verified Working Transactions entry was updated from "independent confirmation" to its explicit PXD label. No new sections added; edits limited to existing dMint coverage. |
+| 2026-05-14 | (this commit) | **Retitled to "Radiant Glyph Protocol Implementation Guide"** (was "Radiant Blockchain Glyph NFT Implementation Guide"). The guide grew §7 (Fungible Tokens) and §8 (Decentralized Mint) but the title, intro paragraph, and Overview still framed it as NFT-only. Updated all three to describe the protocol's three asset classes — NFTs (`p:[2]`), FTs (`p:[1]`), and dMint (`p:[1,4]`). The "What are Glyph NFTs?" Overview subsection became "What is the Glyph Protocol?" with a per-asset-class breakdown. `BUILDING_WITH_CLAUDE.md` reframed in parallel. No protocol/byte content changed — framing only. |
+| 2026-05-11 | (pyrxd 0.5.0 audit) | Three follow-ups from the pyrxd 0.5.0 re-audit. (1) **R3 PUSHDATA4 reveal-payload support**: confirmed the GLYPH mainnet reveal `b965b32d…9dd6` uses `OP_PUSHDATA4` (`0x4e`) to push a 65,569-byte CBOR body (over the `OP_PUSHDATA2` 65,535-byte ceiling). The recommended CBOR payload cap is **256 KB** (262,144 bytes) via PUSHDATA4 — already noted in §§8, 11, 12; this changelog row records the verification. (2) **R1 reward-shape statement strengthened**: the §8 V1-vs-V2 table now states explicitly that V2's entire 107-byte output-validation block (the FT-conservation epilogue, `_PART_C` in the pyrxd reference, equal to `_V1_EPILOGUE_SUFFIX[18:]`) is byte-identical to V1's tail — not merely the 12-byte `dec0e9aa76e378e4a269e69d` fingerprint. The whole epilogue is shared, which is what the covenant actually enforces. (3) **Second mainnet mint golden vector locked in**: PXD token mint `c9fdcd3488f3e396bec3ce0b766bb8070963e7e75bb513b8820b6663e469e530` (2026-05-11; deploy reveal `8eeb333943771991c2752abc78038365ecd76b1a24426f7a3212eea71b6a6564`) is now pinned alongside the snk mint `146a4d68…f3c` (block 422,865) as a second independent timestamp confirming the canonical V1 mint scriptSig and 4-output shape. The §8 mainnet-anchors table and §17 golden-vectors table both reference the pair; the §16 Verified Working Transactions entry was updated from "independent confirmation" to its explicit PXD label. No new sections added; edits limited to existing dMint coverage. |
 | 2026-05-11 | (earlier commit) | V1 mint mechanics: added "V1 mint tx mechanics (mainnet-verified)" subsection to §8 covering the canonical 4-output mint tx shape (contract recreate + 75-byte FT reward + OP_RETURN `6a 03 6d7367 …` msg marker + change), the 72-byte V1 mint scriptSig layout (`<0x04 nonce(4)> <0x20 inputHash(32)> <0x20 outputHash(32)> <0x00>`), the V1 PoW preimage construction (`SHA256(outpointTxHash || contractRef) || SHA256(SHA256d(input_script) || SHA256d(output_script))`, hashed with the 4-byte nonce via `SHA256d`), and the `build_pow_preimage` / `build_mint_scriptsig` reference API (now returning `PowPreimageResult(preimage, input_hash, output_hash)`). Anchored against mainnet mints `146a4d68…f3c` and `c9fdcd34…e530`. Fixed broken TOC sub-anchors under §8 and a stray HTML-comment fragment in the Known Gotchas section. Also (same day, separate edit) clarified that V2 mint reward outputs are **byte-identical** to V1 (75-byte FT-wrapped with the same `dec0e9aa76e378e4a269e69d` fingerprint) — the only mint-tx-level V1/V2 difference is the scriptSig nonce width (4 vs 8 bytes). This was caught by a red-team audit of the pyrxd reference implementation, which had a latent bug emitting a plain 25-byte P2PKH at vout[1] for V2 mints; the bug was fixed pre-V2-mainnet-deploy by routing V2 through the same FT-wrapped reward bytecode (`_PART_C`) used by V1. Any implementation emitting a plain P2PKH at vout[1] — V1 or V2 — will be rejected by the covenant. Generalised the §8 reward-shape gotcha to V1+V2 and added explicit V1/V2 rows to the critical-warning table. |
 | 2026-05-10 | (prior) | Major dMint expansion: new top-level §8 "Decentralized Mint (dMint)" section with V1 contract byte layout (state 96B + epilogue 145B = 241B), deploy commit/reveal shape (N+3 outputs each), V1 CBOR schema (`p:[1,4]`, no `v`), warning that Photonic-master ships V2-only emitters, opcode-aware classification rule + canonical walker, token-burn defense for funding-input selection, scripthash-history disambiguation pattern, PUSHDATA4 sizing rule for large CBOR bodies, "Known gotchas" subsection covering the four pyrxd compound-doc findings (classifier gap, mint-shape mismatch, hashlock reuse, byte-scan DoS). Anchored with GLYPH deploy commit `a443d9df…878b` and reveal `b965b32d…9dd6`, both added to Verified Working Transactions. Added "First dMint deploy or mint?" routing to FOR AI AGENTS block. Replaced the §19 dMint stub with an in-guide cross-reference. Corrected mis-labeling of dMint contract UTXOs as "FT control / mint-authority." Based on pyrxd M1+M2 byte-by-byte research (`dmint-research-mainnet.md`, `dmint-research-photonic-deploy.md`). |
 | 2026-04-17 | (prior) | Added MUST-vs-SHOULD tier table for CBOR fields, cross-language regex note for wallet classifiers, multi-library CBOR ecosystem warning, alternative IPFS provider options, CID validation in `uploadFileToPinata`, Changelog section. |
