@@ -3044,6 +3044,27 @@ it experimental and gate it behind an explicit opt-in flag — see "V2
 dMint footgun" below) or implementing a format that was never deployed
 (a trap; revisit your spec source).
 
+### Reference implementation: pyrxd's golden-vector tests
+
+The pyrxd Python SDK ships the four golden-vector test classes that
+correspond to the table above. Each pins one wire-format builder against
+real mainnet bytes; together they cover the full Glyph protocol surface
+that pyrxd builds. Reading them is the fastest way to see what a
+"correct" assertion shape looks like in practice:
+
+| What | pyrxd test class | Source |
+|------|------------------|--------|
+| FT locking script (75 B) | `TestFtLockingScriptMainnetGolden` | `tests/test_dmint_module.py` |
+| NFT locking script (63 B) | `TestNftLockingScriptMainnetGolden` | `tests/test_glyph.py` |
+| Commit-script (75 B; FT + NFT branches) | `TestCommitLockingScriptMainnetGolden` | `tests/test_glyph_dmint.py` |
+| CBOR reveal payload (65,569 B w/ embedded PNG) | `TestCborPayloadMainnetGolden` | `tests/test_glyph.py` (fixture: `tests/fixtures/glyph_reveal_cbor.bin`) |
+| V1 dMint contract script (241 B) | `TestV1GoldenVectorGlyphPattern` | `tests/test_dmint_v1_deploy.py` |
+| V1 dMint mint-tx scriptSig + reward | `TestCovenantShape` | `tests/test_dmint_v1_mint.py` |
+
+Mirror or cross-check against these if you're implementing the same
+protocol in another language — same bytes in, same bytes out is the
+strongest interop contract you can write.
+
 ---
 
 ## Common Errors & Solutions
@@ -3950,7 +3971,7 @@ See [Thumbnail Size vs Cost Tradeoffs](#thumbnail-size-vs-cost-tradeoffs) and [F
 
 ---
 
-**Last Updated:** 2026-05-11 — added V1 mint tx mechanics (4-output shape, 72-byte mint scriptSig, PoW preimage construction, `PowPreimageResult` reference API). 2026-05-10 added Decentralized Mint (dMint) section with V1 contract layout, deploy shape, CBOR schema, and chain-walking patterns. Based on byte-by-byte mainnet research from pyrxd's V1 dMint mint + deploy work. See Changelog.
+**Last Updated:** 2026-05-13 — cross-referenced the four mainnet golden-vector test classes shipped in pyrxd 0.5.1 (FT, NFT, commit, CBOR payload) as a reference implementation downstream SDK authors can mirror. 2026-05-11 added V1 mint tx mechanics (4-output shape, 72-byte mint scriptSig, PoW preimage construction, `PowPreimageResult` reference API). 2026-05-10 added Decentralized Mint (dMint) section with V1 contract layout, deploy shape, CBOR schema, and chain-walking patterns. Based on byte-by-byte mainnet research from pyrxd's V1 dMint mint + deploy work. See Changelog.
 **Based on Verified Mainnet Transactions:**
 - With thumbnail: `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e`
 
@@ -4005,6 +4026,7 @@ and tracks documentation evolution.
 
 | Date | Commit range | Summary |
 |---|---|---|
+| 2026-05-13 | (pyrxd 0.5.1) | Cross-reference the four mainnet golden-vector test classes that pyrxd 0.5.1 ships — one per wire-format builder pinned in §17. Reading them is the shortest path to seeing what a "byte-equal to mainnet" assertion looks like in working code; downstream SDK authors in other languages can mirror or cross-check against the same fixtures. Added `### Reference implementation: pyrxd's golden-vector tests` subsection in §17 with a builder → test-class → source-file mapping for FT, NFT, commit (FT + NFT branches), CBOR reveal payload (incl. 65,569 B binary fixture), V1 dMint contract script, and V1 dMint mint-tx scriptSig + reward. No protocol-level changes; documentation cross-link only. |
 | 2026-05-11 | (this commit, pyrxd 0.5.0 audit) | Three follow-ups from the pyrxd 0.5.0 re-audit. (1) **R3 PUSHDATA4 reveal-payload support**: confirmed the GLYPH mainnet reveal `b965b32d…9dd6` uses `OP_PUSHDATA4` (`0x4e`) to push a 65,569-byte CBOR body (over the `OP_PUSHDATA2` 65,535-byte ceiling). The recommended CBOR payload cap is **256 KB** (262,144 bytes) via PUSHDATA4 — already noted in §§8, 11, 12; this changelog row records the verification. (2) **R1 reward-shape statement strengthened**: the §8 V1-vs-V2 table now states explicitly that V2's entire 107-byte output-validation block (the FT-conservation epilogue, `_PART_C` in the pyrxd reference, equal to `_V1_EPILOGUE_SUFFIX[18:]`) is byte-identical to V1's tail — not merely the 12-byte `dec0e9aa76e378e4a269e69d` fingerprint. The whole epilogue is shared, which is what the covenant actually enforces. (3) **Second mainnet mint golden vector locked in**: PXD token mint `c9fdcd3488f3e396bec3ce0b766bb8070963e7e75bb513b8820b6663e469e530` (2026-05-11; deploy reveal `8eeb333943771991c2752abc78038365ecd76b1a24426f7a3212eea71b6a6564`) is now pinned alongside the snk mint `146a4d68…f3c` (block 422,865) as a second independent timestamp confirming the canonical V1 mint scriptSig and 4-output shape. The §8 mainnet-anchors table and §17 golden-vectors table both reference the pair; the §16 Verified Working Transactions entry was updated from "independent confirmation" to its explicit PXD label. No new sections added; edits limited to existing dMint coverage. |
 | 2026-05-11 | (earlier commit) | V1 mint mechanics: added "V1 mint tx mechanics (mainnet-verified)" subsection to §8 covering the canonical 4-output mint tx shape (contract recreate + 75-byte FT reward + OP_RETURN `6a 03 6d7367 …` msg marker + change), the 72-byte V1 mint scriptSig layout (`<0x04 nonce(4)> <0x20 inputHash(32)> <0x20 outputHash(32)> <0x00>`), the V1 PoW preimage construction (`SHA256(outpointTxHash || contractRef) || SHA256(SHA256d(input_script) || SHA256d(output_script))`, hashed with the 4-byte nonce via `SHA256d`), and the `build_pow_preimage` / `build_mint_scriptsig` reference API (now returning `PowPreimageResult(preimage, input_hash, output_hash)`). Anchored against mainnet mints `146a4d68…f3c` and `c9fdcd34…e530`. Fixed broken TOC sub-anchors under §8 and a stray HTML-comment fragment in the Known Gotchas section. Also (same day, separate edit) clarified that V2 mint reward outputs are **byte-identical** to V1 (75-byte FT-wrapped with the same `dec0e9aa76e378e4a269e69d` fingerprint) — the only mint-tx-level V1/V2 difference is the scriptSig nonce width (4 vs 8 bytes). This was caught by a red-team audit of the pyrxd reference implementation, which had a latent bug emitting a plain 25-byte P2PKH at vout[1] for V2 mints; the bug was fixed pre-V2-mainnet-deploy by routing V2 through the same FT-wrapped reward bytecode (`_PART_C`) used by V1. Any implementation emitting a plain P2PKH at vout[1] — V1 or V2 — will be rejected by the covenant. Generalised the §8 reward-shape gotcha to V1+V2 and added explicit V1/V2 rows to the critical-warning table. |
 | 2026-05-10 | (prior) | Major dMint expansion: new top-level §8 "Decentralized Mint (dMint)" section with V1 contract byte layout (state 96B + epilogue 145B = 241B), deploy commit/reveal shape (N+3 outputs each), V1 CBOR schema (`p:[1,4]`, no `v`), warning that Photonic-master ships V2-only emitters, opcode-aware classification rule + canonical walker, token-burn defense for funding-input selection, scripthash-history disambiguation pattern, PUSHDATA4 sizing rule for large CBOR bodies, "Known gotchas" subsection covering the four pyrxd compound-doc findings (classifier gap, mint-shape mismatch, hashlock reuse, byte-scan DoS). Anchored with GLYPH deploy commit `a443d9df…878b` and reveal `b965b32d…9dd6`, both added to Verified Working Transactions. Added "First dMint deploy or mint?" routing to FOR AI AGENTS block. Replaced the §19 dMint stub with an in-guide cross-reference. Corrected mis-labeling of dMint contract UTXOs as "FT control / mint-authority." Based on pyrxd M1+M2 byte-by-byte research (`dmint-research-mainnet.md`, `dmint-research-photonic-deploy.md`). |
