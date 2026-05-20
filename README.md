@@ -1402,6 +1402,75 @@ rejects it. If your test passes for the buggy classifier, your test is
 not exercising the false-positive case — fix the test first, then the
 classifier.
 
+### Constructing Covenants: Avoid Phantom Refs in Embedded Bytecode
+
+The opcode-position rule above has a **producer-side mirror** that bites
+covenant authors, not just wallet classifiers. The same linear
+byte-walk that *your* classifier must avoid is exactly how **consensus
+itself** scans every output's `scriptPubKey` for ref opcodes. If you
+build a covenant that embeds token-script bytes as raw comparison data,
+consensus can mis-read one of those payload bytes as a real ref opcode —
+manufacturing a **phantom ref** that breaks conservation and gets your
+transaction rejected.
+
+**Where consensus scans.** Radiant Core's induction-rule parser
+(`ReferenceParser::validateTransactionReferenceOperations`,
+`src/validation.h`; `CScript::GetPushRefs`, `src/script/script.cpp`)
+walks each output script from start to end, looking for the ref-family
+opcodes (`0xd0`–`0xd3`, `0xd8`). When it lands on one **in opcode
+position**, it consumes the **next 36 bytes** as the ref operand. It
+skips pushdata operands (after `0x01`–`0x4b`, `0x4c`/`0x4d`/`0x4e`) but
+is otherwise purely syntactic — it does not understand your covenant's
+intent. The conservation rule then requires every ref found in an output
+to also appear in some input; a ref that appears nowhere in the inputs
+fails:
+
+```
+bad-txns-inputs-outputs-invalid-transaction-reference-operations
+```
+
+**The trap.** Covenants commonly verify a settlement output by comparing
+it against an expected script — e.g. building the expected FT holder
+bytecode and checking it with `OP_OUTPUTBYTECODE ... OP_EQUAL`. If that
+expected bytecode is embedded as **raw script bytes** (not behind a
+pushdata), it contains the FT epilogue `…dec0e9aa76e378e4a269e69d` and
+its `0xd0`/`0xd8` ref markers as literal bytes. A stray `0xd8` or `0xd0`
+byte inside that embedded region — landing on a position the parser
+reaches as an opcode — gets read as a real `OP_PUSHINPUTREFSINGLETON` /
+`OP_PUSHINPUTREF`, and the 36 bytes after it become a **phantom ref**
+that exists in no input. Consensus rejects, even though every *intended*
+ref is conserved correctly.
+
+This is not hypothetical: a ref-bearing swap-covenant spike hit exactly
+this. Its single legitimate `OP_PUSHINPUTREF <REF>` at offset 0 was fine,
+but a `0xd8` byte deep inside an embedded `OP_OUTPUTBYTECODE` comparison
+template was parsed as a singleton ref, and `testmempoolaccept` on
+mainnet returned the reject string above. The diagnosis only became
+clear after walking the script the same way `GetPushRefs` does.
+
+**Fixes, in order of preference:**
+
+1. **Push-wrap the embedded bytecode.** Emit the expected-script template
+   behind a pushdata (`0x01`–`0x4e`) so consensus skips every byte of it,
+   exactly as the classifier walker does. No `0xd0`/`0xd8` byte inside a
+   pushdata operand is ever read as an opcode. This is the surgical fix —
+   the pyrxd dMint epilogue uses it (e.g. `01 d0`, `01 d8`: each ref-range
+   byte is pushed as 1-byte data, never executed).
+2. **Compare a hash instead of the bytes.** Where introspection allows,
+   verify `OP_OUTPUTBYTECODE OP_HASH256 <expected_hash> OP_EQUAL` so the
+   raw token bytes never appear in your covenant at all.
+3. **Re-examine the shape.** If neither works, reconsider whether the
+   settlement output must be epilogue-shaped inside the covenant.
+
+**Verification step you must run before broadcasting.** Walk your
+finished covenant `scriptPubKey` with the opcode-aware walker above and
+collect every ref-opcode operand it finds. The set must contain
+**exactly** the refs you intend (and every one must trace to an input).
+If the walk surfaces a ref you didn't author, you have a phantom ref —
+fix the encoding, don't broadcast. A bare-byte search for `0xd0`/`0xd8`
+will *under*-count here (it can't tell payload from opcode), so use the
+position-aware walk, not a substring scan.
+
 ### Constructing an FT Holder Output (Sending)
 
 When building a transfer, **do not try to derive** the 36-byte ref from the
