@@ -94,6 +94,15 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
    (V2) is `0x00`/`0x01`/`0x02` (radiantjs `DmintAlgorithm`; Photonic
    `script.ts`). Worth disambiguating the two.
 
+8. **The recommended 256 KB CBOR cap is too low for real Photonic glyphs.**
+   Photonic mints on-chain content up to 512 KiB (`mintEmbedMaxBytes`,
+   `GLYPH_INSCRIPTION_MAX_SIZE`), so the full CBOR payload (content +
+   name/desc/refs + framing) can exceed 512 KB. A 256 KB decode cap silently
+   drops those tokens from indexers/wallets. Set the cap *above* the ecosystem
+   content limit — 640 KiB (512 KiB content + headroom) is a safe value. The
+   §"CBOR Payload Size Cap (DoS vs Real Deploys)" recommendation should be
+   raised accordingly.
+
 > **Provenance note:** this `MudwoodLabs/radiant-glyph-guide` README is
 > byte-identical to `Zyrtnin-org/radiant-glyph-guide` (verified by `diff` on
 > 2026-06-07) — a clean rehost, no tampering.
