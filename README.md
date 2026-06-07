@@ -15,6 +15,7 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
 > - **First NFT mint?** → Read sections 2 (Critical Requirements), 5 (On-Chain Images), 9 (CBOR Payload), then 10-12 (Commit/Reveal/Signing)
 > - **First FT integration?** → Read section 7 (Fungible Tokens) for the 75-byte template + wallet classifier patterns
 > - **First dMint deploy or mint?** → Read [section 8 (Decentralized Mint)](#decentralized-mint-dmint) for the V1 contract layout, deploy commit/reveal shape, [V1 mint tx mechanics](#v1-mint-tx-mechanics-mainnet-verified) (4-output shape, 72-byte mint scriptSig, PoW preimage layout), and Photonic-master divergences. See also the [byte-decoded GLYPH reference deploy and snk/PXD mint txs](#verified-working-transactions-january-2026).
+> - **Writing a covenant or token-aware contract?** → Read [Avoid Phantom Refs in Embedded Bytecode](#constructing-covenants-avoid-phantom-refs-in-embedded-bytecode) and [NFT Conservation Has No Consensus "Exactly One" Rule](#nft-conservation-has-no-consensus-exactly-one-rule): an FT cannot be held in a foreign covenant (gate its spend path); an NFT can. For ref-authenticity checks against an indexer, see [Resolving a Ref via RXinDexer](#resolving-a-ref-via-rxindexer).
 > - **Debugging a failed mint?** → Jump to section 15 (Common Errors) and the Appendix (opcodes, hex values)
 > - **Upgrading to V2?** → Read section 19 (What's New in V2) and the Fee Calculations section for updated costs
 > - **Hardware wallet (Ledger) support?** → See [`radiant-ledger-guide`](https://github.com/Zyrtnin-org/radiant-ledger-guide). Minting still requires software signing; receiving + spending Glyph UTXOs works with the community Ledger app
@@ -1158,6 +1159,43 @@ protocol.
 | **Token amount** | N/A (unique token, not a quantity) | UTXO photon value = token balance. No separate amount field. |
 | **Key separator** | `75` OP_DROP between ref and P2PKH | `bd` OP_STATESEPARATOR between P2PKH and FT conservation |
 
+### NFT Conservation Has No Consensus "Exactly One" Rule
+
+A common and dangerous assumption is that Radiant consensus guarantees an NFT
+singleton always lands on **exactly one** output. **It does not.** The
+consensus ref rules enforce only two things:
+
+- **Output refs ⊆ input refs** (`validatePushRefRule` in `validation.h`): a
+  singleton appearing on an output must trace back to a singleton on some
+  input — you cannot conjure one from nothing.
+- **No disallowed siblings** (`validateDisallowedSiblingsRefRule`): the ref may
+  not appear on an output it was forbidden from.
+
+Neither rule requires the singleton to appear on **any** output. Spending an
+NFT into a transaction with zero copies of its ref is a perfectly valid
+**burn** at consensus — the token is destroyed, no error raised. "Exactly one
+output, carrying the singleton forward" is a property a **wallet or covenant
+must enforce itself** (e.g. `tx.outputs.length == 1` +
+`tx.outputs.refOutputCount(ref) == 1`); there is no consensus backstop.
+
+Two consequences worth internalizing:
+
+1. **A careless or malicious spend can burn an NFT irreversibly.** A coin
+   selector that treats an NFT UTXO as plain RXD funding (see [Token-Burn
+   Defense](#token-burn-defense-coin-selection-must-reject-token-bearing-utxos)
+   below) destroys it; so does any transaction that simply omits the
+   forwarding output. For a one-of-one there is no recovery — the conservation
+   guarantee is entirely on you.
+2. **An NFT *can* be held directly inside a covenant.** Unlike an FT — which is
+   welded to its code-script by the conservation epilogue and cannot be moved
+   into a foreign script (see [Avoid Phantom
+   Refs](#constructing-covenants-avoid-phantom-refs-in-embedded-bytecode)
+   below) — an NFT singleton is welded only to its 36-byte ref. A covenant of
+   the form `d8 <ref> 75 <covenant-logic>` both holds the singleton and gates
+   its spend; consensus places no code-script constraint on where the singleton
+   goes, which is exactly why the covenant body is the *sole* guarantor of
+   conservation.
+
 ### FT Holder Template (75 bytes)
 
 Verified against **2,309 FT holder samples across 6 distinct tokens, 500
@@ -1187,7 +1225,7 @@ opcodes in the sequence are:
 The remaining bytes in the epilogue (`de`, `c0`, `aa`, `76`, `78`, `a2`,
 `69`, `9d`) are a mix of BCH-lineage opcodes retained by Radiant (stack
 manipulation, comparison, hashing — e.g. `76 = OP_DUP`, `a2 = OP_GREATERTHANOREQUAL`,
-`9d = OP_EQUALVERIFY`) and Radiant-specific introspection opcodes (`de`, `c0`,
+`9d = OP_NUMEQUALVERIFY`) and Radiant-specific introspection opcodes (`de`, `c0`,
 `aa`, `78`) that feed the state-aware values into the comparison. Calling
 them "standard Bitcoin" would be misleading — several are Radiant additions.
 Together they wire the two sums into the conservation check. A full opcode-by-opcode decode is available in
@@ -1402,12 +1440,135 @@ rejects it. If your test passes for the buggy classifier, your test is
 not exercising the false-positive case — fix the test first, then the
 classifier.
 
+### Constructing Covenants: Avoid Phantom Refs in Embedded Bytecode
+
+The opcode-position rule above has a **producer-side mirror** that bites
+covenant authors, not just wallet classifiers. The same linear
+byte-walk that *your* classifier must avoid is exactly how **consensus
+itself** scans every output's `scriptPubKey` for ref opcodes. If you
+build a covenant that embeds token-script bytes as raw comparison data,
+consensus can mis-read one of those payload bytes as a real ref opcode —
+manufacturing a **phantom ref** that breaks conservation and gets your
+transaction rejected.
+
+**Where consensus scans.** Radiant Core's induction-rule parser
+(`ReferenceParser::validateTransactionReferenceOperations`,
+`src/validation.h`; `CScript::GetPushRefs`, `src/script/script.cpp`)
+walks each output script from start to end, looking for the ref-family
+opcodes (`0xd0`–`0xd3`, `0xd8`). When it lands on one **in opcode
+position**, it consumes the **next 36 bytes** as the ref operand. It
+skips pushdata operands (after `0x01`–`0x4b`, `0x4c`/`0x4d`/`0x4e`) but
+is otherwise purely syntactic — it does not understand your covenant's
+intent. The conservation rule then requires every ref found in an output
+to also appear in some input; a ref that appears nowhere in the inputs
+fails:
+
+```
+bad-txns-inputs-outputs-invalid-transaction-reference-operations
+```
+
+**The trap.** Covenants commonly verify a settlement output by comparing
+it against an expected script — e.g. building the expected FT holder
+bytecode and checking it with `OP_OUTPUTBYTECODE ... OP_EQUAL`. If that
+expected bytecode is embedded as **raw script bytes** (not behind a
+pushdata), it contains the FT epilogue `…dec0e9aa76e378e4a269e69d` and
+its `0xd0`/`0xd8` ref markers as literal bytes. A stray `0xd8` or `0xd0`
+byte inside that embedded region — landing on a position the parser
+reaches as an opcode — gets read as a real `OP_PUSHINPUTREFSINGLETON` /
+`OP_PUSHINPUTREF`, and the 36 bytes after it become a **phantom ref**
+that exists in no input. Consensus rejects, even though every *intended*
+ref is conserved correctly.
+
+This is not hypothetical: a ref-bearing swap-covenant spike hit exactly
+this. Its single legitimate `OP_PUSHINPUTREF <REF>` at offset 0 was fine,
+but a `0xd8` byte deep inside an embedded `OP_OUTPUTBYTECODE` comparison
+template was parsed as a singleton ref, and `testmempoolaccept` on
+mainnet returned the reject string above. The diagnosis only became
+clear after walking the script the same way `GetPushRefs` does.
+
+**Fixes, in order of preference:**
+
+1. **Push-wrap the embedded bytecode.** Emit the expected-script template
+   behind a pushdata (`0x01`–`0x4e`) so consensus skips every byte of it,
+   exactly as the classifier walker does. No `0xd0`/`0xd8` byte inside a
+   pushdata operand is ever read as an opcode. This is the surgical fix —
+   the pyrxd dMint epilogue uses it (e.g. `01 d0`, `01 d8`: each ref-range
+   byte is pushed as 1-byte data, never executed).
+2. **Compare a hash instead of the bytes.** Where introspection allows,
+   verify `OP_OUTPUTBYTECODE OP_HASH256 <expected_hash> OP_EQUAL` so the
+   raw token bytes never appear in your covenant at all.
+3. **Re-examine the shape.** If neither works, reconsider whether the
+   settlement output must be epilogue-shaped inside the covenant.
+
+**Verification step you must run before broadcasting.** Walk your
+finished covenant `scriptPubKey` with the opcode-aware walker above and
+collect every ref-opcode operand it finds. The set must contain
+**exactly** the refs you intend (and every one must trace to an input).
+If the walk surfaces a ref you didn't author, you have a phantom ref —
+fix the encoding, don't broadcast. A bare-byte search for `0xd0`/`0xd8`
+will *under*-count here (it can't tell payload from opcode), so use the
+position-aware walk, not a substring scan.
+
+**A second, independent gate: an FT cannot be *held* in a foreign covenant at
+all.** Suppose you eliminate the phantom ref and still try to move an FT into a
+covenant output — it fails a *different* rule, the FT's own conservation
+epilogue. The `e3`/`e4` `OP_CODESCRIPTHASHVALUESUM` opcodes (see [FT Holder
+Template](#ft-holder-template-75-bytes) above) sum photons only across
+inputs/outputs whose **`codeScript` hash matches the FT's**. An FT can
+therefore only flow to an output carrying its *exact* code-script; a foreign
+covenant script hashes differently, the output-side sum is zero, and the spend
+fails with:
+
+```
+mandatory-script-verify-flag-failed (Script failed an OP_NUMEQUALVERIFY operation)
+```
+
+The two gates surface **in sequence** — fix the phantom ref and this one
+appears next, which looks like a regression if you only knew about the first.
+
+**The way through** rests on one fact: `codeScriptHash` is computed over the
+bytes **from the byte immediately after `OP_STATESEPARATOR` (`0xbd`) onward** —
+the separator byte itself and the prologue before it are both excluded
+(`script_execution_context.h`; the parser advances past the `0xbd` before
+marking the boundary). So a covenant can *replace the FT's
+P2PKH prologue with covenant logic* while keeping the `bd d0 <ref>
+dec0e9aa76e378e4a269e69d` epilogue intact: a covenant-prologue FT input and a
+standard-P2PKH FT output share the **same** `codeScriptHash` and conserve
+together. The covenant gates the FT's *spend path*; it never *holds* the FT in
+a foreign script. Two rules make this work:
+
+- The prologue must contain **no bare `0xbd` in opcode position** (push-wrapped
+  hash bytes are fine). The consensus ref-parser latches the *first*
+  `OP_STATESEPARATOR` and rejects a script with a second one outright, so a
+  stray `0xbd` in the prologue doesn't merely shift the boundary — it fails the
+  transaction.
+- The settlement output is pinned by **hash-compare** against the exact FT
+  code-script (`hash256(outputs[0].lockingBytecode) == EXPECTED_FT_HASH`),
+  never by embedding the FT bytes raw (the Layer-1 guard above).
+
+This is the FT mirror of the NFT case in [NFT Conservation Has No Consensus
+"Exactly One" Rule](#nft-conservation-has-no-consensus-exactly-one-rule) above:
+an NFT *can* be held in a covenant (welded only to its ref), an FT *cannot*
+(welded to its code-script) — so you gate its spend instead. (Source:
+`interpreter.cpp` `getCodeScriptHashValueSumOutputs`; `script_execution_context.h`
+`codeScriptHash` boundary.)
+
 ### Constructing an FT Holder Output (Sending)
 
 When building a transfer, **do not try to derive** the 36-byte ref from the
 holder's address or pubkeyhash — the ref identifies the *token*, not the
 *holder*, and it is only discoverable by reading an existing FT UTXO of
 that token from the chain.
+
+That 36-byte ref is the token's **genesis outpoint** — the FT-commit/mint
+origin (`commit_txid_reversed + commit_vout_LE`). It is identical in *every*
+holder UTXO of the token and **constant across every transfer**. It is **not**
+the reveal txid, and **not** the txid of the UTXO you are currently reading.
+Copy the ref bytes verbatim from an existing holder UTXO; never recompute them
+from the current UTXO's txid — the same trap the [Container and Author
+Refs](#container-and-author-refs) section warns about for NFT refs. (For a
+dMint-minted FT, the genesis ref is the deploy commit's `:0` outpoint, shared
+by every contract and every mint reward of that token.)
 
 Procedure for building a send:
 
@@ -1935,10 +2096,10 @@ see below) is also effectively consensus for your mint.
 | 5 | Mutable (MUT) | `[5]` | |
 | 6 | Explicit Burn | `[6]` | |
 | 7 | Container / Collection | `[7]` | Parent-only; children reference via `in` field. |
-| 8 | Encrypted Content | `[8]` | |
-| 9 | Timelocked Reveal | `[9]` | |
+| 8 | Encrypted Content | `[2, 8]` | Payload encrypted client-side (XChaCha20-Poly1305); the decryption key is released later. Requires an NFT base type. Pairs with `[9]`. |
+| 9 | Timelocked Reveal | `[2, 8, 9]` | Encrypted payload gated until `unlock_at` (block height or unix time). The minter commits `sha256(CEK)` + `unlock_at` on-chain and holds the content key off-chain; after unlock, an `OP_RETURN` reveal tx publishes the CEK and wallets verify `sha256(cek) == commitment` then decrypt. The token stays freely transferable throughout — only payload *visibility* is gated. Requires `[8]`. (REP-3009.) |
 | 10 | Issuer Authority | `[10]` | |
-| 11 | WAVE Naming System | `[11]` | On-chain DNS-like records. |
+| 11 | WAVE Naming System | `[2, 5, 11]` | On-chain DNS-like naming. Canonical CBOR carries the name in **`attrs.name`** (plus `domain`/`target`/`target_type`); a top-level `name` field still decodes but is **not** indexed by RXinDexer. |
 
 **Note on `p` array combinations:** `p: [1, 4]` means "this is a Fungible Token deployed
 via dMint." Combinations like `[2, 7]` (NFT that is also a container) are valid. The first
@@ -2068,6 +2229,56 @@ Container refs organize NFTs into collections:
 3. Mint child NFTs using that ref in their `in` field
 4. Check Glyphium - children should appear nested under the container
 5. If children are orphaned, your ref extraction is wrong
+
+### Resolving a Ref via RXinDexer
+
+To go the other direction — from a 36-byte ref to the token it identifies, or
+to confirm a ref is a genuine on-chain `gly` reveal rather than a
+self-consistent fake singleton — wallets, explorers, and indexers query a
+glyph indexer such as **RXinDexer**. Three integration facts cost real
+debugging time:
+
+1. **RXinDexer can be deployed as ElectrumX-WebSocket *or* REST-only — don't
+   assume both run.** The same indexer ships a `glyph.*` ElectrumX-ws interface
+   *and* a FastAPI REST API, but a given deployment may run only one. Check the
+   *actual* listening services on the target host (`ss -tlnp`, `docker ps`,
+   systemd units) before wiring an adapter — not the project README or a
+   regtest compose file.
+
+2. **The REST per-token route keys on the 72-hex wire ref, not a bare txid.**
+   `GET /tokens/{ref}` expects the full 36-byte ref (txid + vout) as 72 hex
+   chars. A bare txid returns `404`.
+
+3. **The txid byte order differs between the URL key and the response
+   identifier.** A glyph ref keeps the txid in **display** order for the URL
+   key but **internal** (reversed) order in the wire ref:
+   - **URL key** (`/tokens/{ref}`): display-order txid + 4-byte little-endian vout.
+   - **Response identifier** you compare against — the REST `token_id`, or the
+     `glyph_id` / `txid` + `vout` fields on the ElectrumX-ws `glyph.get_token`
+     response: internal (reversed) txid + LE vout.
+
+   The same txid therefore appears in *opposite* byte order in the request
+   versus the value you bind against. Confirm this empirically against the live
+   endpoint; do not assume the field is named `ref_outpoint` or `ref_txid`.
+
+**Fail closed.** Treat an unknown ref (`404`) as "not a genuine glyph," and a
+transient/5xx error as "cannot confirm" — in both cases refuse to treat the ref
+as authentic rather than passing it. An authenticity check is only as strong as
+its weakest transport.
+
+**Trust the live endpoint over a local source checkout.** The deployed API and
+a checked-out copy of the indexer can be different versions with different route
+shapes and field names (e.g. a `/glyphs/{ref}` route returning a `ref` field in
+display `txid_vout` form vs. a `/tokens/{ref}` route returning a `token_id`
+field in 72-hex wire form). Pin your adapter to the field the **live** API
+actually returns, and add a smoke check that resolves one known-good ref and one
+fabricated ref before relying on the result.
+
+> **Testing note.** A mock indexer that returns the final *typed* object your
+> code expects will hide the entire dict→object parsing layer — including a
+> field-name mismatch like reading `ref_outpoint` when the real API returns
+> `glyph_id`. Test ref resolution against the real indexer (or a fixture
+> captured from it), not only against a fake that short-circuits the parsing.
 
 ### JavaScript CBOR Encoding
 
@@ -3876,7 +4087,22 @@ See Fee Calculations & Cost Analysis for the post-V2 cost tables.
   for the full V1 contract layout, deploy commit/reveal shapes, CBOR schema, and
   the warning that Photonic-master ships V2-only emitters. For V2-only algorithm
   and DAA mode parameters, see the [Radiant AI Knowledge Base](https://github.com/Radiant-Core/radiant-mcp-server/blob/master/docs/RADIANT_AI_KNOWLEDGE_BASE.md).
-- **WAVE** — On-chain naming system. Protocol 11. Provides human-readable addresses and DNS-like records.
+- **WAVE** — On-chain naming system (protocol `11`; full marker `p: [2, 5, 11]`).
+  Provides human-readable names and DNS-like records. The canonical,
+  indexer-recognized shape carries the name in a nested **`attrs`** dict
+  (`attrs.name`, plus `domain`, `target`, `target_type`), matching Photonic
+  Wallet's `wave.ts`. A WAVE token that stores its name as a **top-level
+  `name`** field still decodes, but is **not indexed by RXinDexer** — emit the
+  `attrs.name` shape or the name is invisible to resolvers.
+- **Encrypted Content / Timelocked Reveal** — protocols `8` and `9` (REP-3009;
+  markers `p: [2, 8]` and `p: [2, 8, 9]`). The payload is encrypted client-side
+  with a 32-byte content key (XChaCha20-Poly1305); the mint commits
+  `sha256(CEK)` plus an `unlock_at` (block height or unix time) on-chain and
+  holds the key off-chain. The token is freely transferable the whole time —
+  only the *visibility* of the encrypted payload is gated. After `unlock_at`, a
+  reveal transaction publishes the CEK in an `OP_RETURN`; wallets verify
+  `sha256(cek) == commitment` and decrypt. (Photonic-compatible; mirrors
+  `timelock.ts`.)
 
 ### Footgun: V2 dMint Deploys Have No Miners (Use V1)
 
@@ -3971,7 +4197,7 @@ See [Thumbnail Size vs Cost Tradeoffs](#thumbnail-size-vs-cost-tradeoffs) and [F
 
 ---
 
-**Last Updated:** 2026-05-13 — cross-referenced the four mainnet golden-vector test classes shipped in pyrxd 0.5.1 (FT, NFT, commit, CBOR payload) as a reference implementation downstream SDK authors can mirror. 2026-05-11 added V1 mint tx mechanics (4-output shape, 72-byte mint scriptSig, PoW preimage construction, `PowPreimageResult` reference API). 2026-05-10 added Decentralized Mint (dMint) section with V1 contract layout, deploy shape, CBOR schema, and chain-walking patterns. Based on byte-by-byte mainnet research from pyrxd's V1 dMint mint + deploy work. See Changelog.
+**Last Updated:** 2026-06-06 — added covenant-author + indexer-integration learnings (FT genesis-ref clarification, NFT singleton conservation is covenant-only, FT-in-covenant `codeScriptHash` weld, resolving a ref via RXinDexer, WAVE `attrs.name` + Timelocked-Reveal/REP-3009 detail); see Changelog. 2026-05-13 — cross-referenced the four mainnet golden-vector test classes shipped in pyrxd 0.5.1 (FT, NFT, commit, CBOR payload) as a reference implementation downstream SDK authors can mirror. 2026-05-11 added V1 mint tx mechanics (4-output shape, 72-byte mint scriptSig, PoW preimage construction, `PowPreimageResult` reference API). 2026-05-10 added Decentralized Mint (dMint) section with V1 contract layout, deploy shape, CBOR schema, and chain-walking patterns. Based on byte-by-byte mainnet research from pyrxd's V1 dMint mint + deploy work. See Changelog.
 **Based on Verified Mainnet Transactions:**
 - With thumbnail: `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e`
 
@@ -4026,6 +4252,7 @@ and tracks documentation evolution.
 
 | Date | Commit range | Summary |
 |---|---|---|
+| 2026-06-06 | (pyrxd 0.6.0) | Covenant-author + indexer-integration learnings. (1) **FT ref = genesis outpoint**: §7 now states the 36-byte FT ref is the FT-commit/mint origin, identical in every holder UTXO and constant across transfers — never the reveal/current txid. (2) **NFT conservation has no consensus "exactly one" rule** (new §7 subsection): consensus enforces only output-refs⊆input-refs and disallow-siblings, so burning an NFT (zero output copies) is valid and "exactly one output" is covenant/wallet-enforced only. An NFT *can* be held in a covenant; an FT cannot. (3) **FT-in-covenant Layer-2 weld**: extended "Avoid Phantom Refs" with the `codeScriptHashValueSum` gate — an FT conserves only to outputs sharing its exact code-script, so a covenant must gate the FT *spend path* (covenant prologue + intact `bd d0 <ref> dec0…` epilogue + hash-compared settlement), not hold the FT. (4) **Resolving a ref via RXinDexer** (new §9 subsection): REST-vs-ElectrumX-ws deployment, the 72-hex wire-ref key (bare txid 404s), the display-vs-internal txid byte-order asymmetry (`token_id`/`glyph_id` fields), fail-closed semantics, and trusting the live endpoint over a source checkout. (5) **WAVE + TIMELOCK detail**: §10 protocol table + §19 now document WAVE's `attrs.name` canonical shape (top-level `name` is not RXinDexer-indexed) and the Encrypted/Timelocked-Reveal flow (`[2,8,9]`, XChaCha20-Poly1305, commit-`sha256(CEK)`-then-`OP_RETURN`-reveal, REP-3009). |
 | 2026-05-13 | (pyrxd 0.5.1) | Cross-reference the four mainnet golden-vector test classes that pyrxd 0.5.1 ships — one per wire-format builder pinned in §17. Reading them is the shortest path to seeing what a "byte-equal to mainnet" assertion looks like in working code; downstream SDK authors in other languages can mirror or cross-check against the same fixtures. Added `### Reference implementation: pyrxd's golden-vector tests` subsection in §17 with a builder → test-class → source-file mapping for FT, NFT, commit (FT + NFT branches), CBOR reveal payload (incl. 65,569 B binary fixture), V1 dMint contract script, and V1 dMint mint-tx scriptSig + reward. No protocol-level changes; documentation cross-link only. |
 | 2026-05-11 | (this commit, pyrxd 0.5.0 audit) | Three follow-ups from the pyrxd 0.5.0 re-audit. (1) **R3 PUSHDATA4 reveal-payload support**: confirmed the GLYPH mainnet reveal `b965b32d…9dd6` uses `OP_PUSHDATA4` (`0x4e`) to push a 65,569-byte CBOR body (over the `OP_PUSHDATA2` 65,535-byte ceiling). The recommended CBOR payload cap is **256 KB** (262,144 bytes) via PUSHDATA4 — already noted in §§8, 11, 12; this changelog row records the verification. (2) **R1 reward-shape statement strengthened**: the §8 V1-vs-V2 table now states explicitly that V2's entire 107-byte output-validation block (the FT-conservation epilogue, `_PART_C` in the pyrxd reference, equal to `_V1_EPILOGUE_SUFFIX[18:]`) is byte-identical to V1's tail — not merely the 12-byte `dec0e9aa76e378e4a269e69d` fingerprint. The whole epilogue is shared, which is what the covenant actually enforces. (3) **Second mainnet mint golden vector locked in**: PXD token mint `c9fdcd3488f3e396bec3ce0b766bb8070963e7e75bb513b8820b6663e469e530` (2026-05-11; deploy reveal `8eeb333943771991c2752abc78038365ecd76b1a24426f7a3212eea71b6a6564`) is now pinned alongside the snk mint `146a4d68…f3c` (block 422,865) as a second independent timestamp confirming the canonical V1 mint scriptSig and 4-output shape. The §8 mainnet-anchors table and §17 golden-vectors table both reference the pair; the §16 Verified Working Transactions entry was updated from "independent confirmation" to its explicit PXD label. No new sections added; edits limited to existing dMint coverage. |
 | 2026-05-11 | (earlier commit) | V1 mint mechanics: added "V1 mint tx mechanics (mainnet-verified)" subsection to §8 covering the canonical 4-output mint tx shape (contract recreate + 75-byte FT reward + OP_RETURN `6a 03 6d7367 …` msg marker + change), the 72-byte V1 mint scriptSig layout (`<0x04 nonce(4)> <0x20 inputHash(32)> <0x20 outputHash(32)> <0x00>`), the V1 PoW preimage construction (`SHA256(outpointTxHash || contractRef) || SHA256(SHA256d(input_script) || SHA256d(output_script))`, hashed with the 4-byte nonce via `SHA256d`), and the `build_pow_preimage` / `build_mint_scriptsig` reference API (now returning `PowPreimageResult(preimage, input_hash, output_hash)`). Anchored against mainnet mints `146a4d68…f3c` and `c9fdcd34…e530`. Fixed broken TOC sub-anchors under §8 and a stray HTML-comment fragment in the Known Gotchas section. Also (same day, separate edit) clarified that V2 mint reward outputs are **byte-identical** to V1 (75-byte FT-wrapped with the same `dec0e9aa76e378e4a269e69d` fingerprint) — the only mint-tx-level V1/V2 difference is the scriptSig nonce width (4 vs 8 bytes). This was caught by a red-team audit of the pyrxd reference implementation, which had a latent bug emitting a plain 25-byte P2PKH at vout[1] for V2 mints; the bug was fixed pre-V2-mainnet-deploy by routing V2 through the same FT-wrapped reward bytecode (`_PART_C`) used by V1. Any implementation emitting a plain P2PKH at vout[1] — V1 or V2 — will be rejected by the covenant. Generalised the §8 reward-shape gotcha to V1+V2 and added explicit V1/V2 rows to the critical-warning table. |
