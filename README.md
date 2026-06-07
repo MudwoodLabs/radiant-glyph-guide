@@ -23,6 +23,83 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
 
 ---
 
+## Verification corrections (2026-06-07)
+
+> Produced by cross-checking this guide against the current Radiant Glyph stack
+> — Photonic Wallet (`@photonic/lib` + `packages/app`), the Glyph-miner
+> reference miner, and RXinDexer — on 2026-06-07. The items below supersede the
+> corresponding statements in §§7–9. Everything **not** listed here checked out:
+> all 18 opcode hex values, the 63-byte NFT singleton and 75-byte FT holder
+> templates (incl. the `dec0e9aa76e378e4a269e69d` epilogue), the `676c79` "gly"
+> marker, protocol IDs 1–11, CBOR tag-64 `main.b` handling, the opcode-aware
+> token-burn walker, and the V1 SHA256D mint-tx byte layout (4-output shape,
+> 72-byte scriptSig, PoW preimage) were all confirmed byte-for-byte.
+
+1. **dMint deploy CBOR is `p: [1, 4]` with `v: 2`, not `v: 1, p: [2, 4]`.**
+   Current Photonic (`packages/app/src/pages/Mint.tsx`) builds an FT dMint
+   deploy with `p: [GLYPH_FT, GLYPH_DMINT]` = `[1, 4]` and `v: 2`. `[2, 4]`
+   would only occur for an *NFT*-based dMint (`GLYPH_NFT`=2), not the normal
+   token case. **The V1/V2 distinction lives in the contract *script* (6 vs 10
+   state items), not in the CBOR `p` array** — both V1 and V2 FT dMints carry
+   `p: [1, 4]`. The §8 V1-vs-V2 table "CBOR" row, divergence-table row 5, and
+   the §9 "V1 vs V2 deploys differ in the CBOR shape itself" note are all wrong
+   on this point. (dMint params live in a `dmint: {...}` sub-object, as the
+   guide notes elsewhere.)
+
+2. **Mint scriptSig nonce width is algorithm-driven, not version-driven.**
+   Glyph-miner (`src/blockchain.ts` `nonceBytesForAlgorithm`) picks the nonce
+   width from the PoW algorithm: **4 bytes for SHA256D, 8 bytes for BLAKE3/K12**
+   — independent of V1 vs V2. A SHA256D V2 contract still uses a 4-byte nonce
+   (72-byte scriptSig); a BLAKE3/K12 contract uses an 8-byte nonce (76-byte
+   scriptSig). The §8 "Mint scriptSig nonce width | 4 bytes (V1) | 8 bytes (V2)"
+   row is a miscategorisation.
+
+3. **V2 dMint contracts are already mined on mainnet.** Glyph-miner parses and
+   mines both the V1 6-state-item layout *and* a V2 "launch" 10-state-item
+   layout (`src/glyph.ts` `parseDmintScript`, with an explicit mainnet
+   V2-launch shape dated 2026-05-26 and full ASERT/LWMA DAA recompute logic in
+   `src/blockchain.ts`). Treat "V2 has no miners / no mainnet deploys found" as
+   **outdated** and re-verify against the current chain. (It was true at the
+   guide's earlier research window; it is no longer.)
+
+4. **RXinDexer's resolve route is `GET /glyphs/{ref}`, not `GET /tokens/{ref}`.**
+   In `electrumx/server/rest_api.py`, `GET /glyphs/{ref}` resolves one token;
+   the `/tokens/{ref}/*` paths are analytics sub-resources only (`/holders`,
+   `/supply`, `/trades`, `/metadata`, …). The key accepts either the 72-hex
+   internal wire ref **or** the display `txid_vout` short form (a bare 64-hex
+   txid 400/404s). The resolve response has **no `token_id`/`glyph_id` field**
+   — it returns `ref` (display) and `ref_hex` (internal 72-hex) side by side
+   (`glyph_index.py` `_token_to_dict`), so you don't have to guess byte order.
+   `glyph_id`/`txid`/`vout` exist only on the ElectrumX-ws `glyph.get_token`
+   method. The display-vs-internal asymmetry the guide warns about is real
+   (RXinDexer even ships `parse_ref_candidates` retry logic for it), but the §9
+   route, key-strictness, and field names should be updated to the above.
+   RXinDexer also parses **both** V1 and V2 dMint contracts (defaulting to V1),
+   so the "V2-only parser fails on V1" failure mode does not apply to it.
+
+5. **`loc_hash` is a guide convention, not part of the Glyph protocol.** It
+   does not appear in the Glyph CDDL. The canonical mechanism for binding a
+   remote asset is the remote-file map's `h` (file hash) / `hs` (hashstamp)
+   fields. `loc_hash` is a fine convention to *propose*, but should be labelled
+   guide-original rather than a protocol `SHOULD` — RXinDexer/Photonic do not
+   index it.
+
+6. **Stale line citation.** `dMintScript()` is at `packages/lib/src/script.ts`
+   around line 1357 in current Photonic (`STATE_ITEM_COUNT = 10`), not lines
+   704–766. Prefer citing function names over line numbers — they drift.
+
+7. **Algo *opcode* vs algo *state value*.** The §8 "Algorithm" row values
+   (`0xaa`=SHA256D, `0xee`=BLAKE3, `0xef`=K12) are the PoW **hash opcodes**
+   embedded in the contract bytecode. The on-chain dMint `algoId` *state item*
+   (V2) is `0x00`/`0x01`/`0x02` (radiantjs `DmintAlgorithm`; Photonic
+   `script.ts`). Worth disambiguating the two.
+
+> **Provenance note:** this `MudwoodLabs/radiant-glyph-guide` README is
+> byte-identical to `Zyrtnin-org/radiant-glyph-guide` (verified by `diff` on
+> 2026-06-07) — a clean rehost, no tampering.
+
+---
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -1637,8 +1714,8 @@ There are two on-chain layouts for dMint contracts:
 | Total | **241 bytes** | varies |
 | Algorithm | byte at offset 19 of epilogue (`0xaa`=SHA256D, `0xee`=BLAKE3, `0xef`=K12) | dedicated state push |
 | DAA | none (FIXED difficulty only) | ASERT / LWMA available |
-| CBOR | `p: [1, 4]`, no `v` field | `v: 1, p: [2, 4]` |
-| Mint scriptSig nonce width | 4 bytes (`0x04` push) | 8 bytes (`0x08` push) |
+| CBOR | `p: [1, 4]`, no `v` field | `p: [1, 4]` with `v: 2` (NOT `[2, 4]`/`v: 1` — corrected 2026-06-07; the `p` base type is FT for both) |
+| Mint scriptSig nonce width | algorithm-driven, NOT version-driven (corrected 2026-06-07): 4 bytes (`0x04`) for SHA256D, 8 bytes (`0x08`) for BLAKE3/K12 | same — a SHA256D V2 contract still uses a 4-byte nonce |
 | Mint reward output (vout[1]) | **75-byte FT-wrapped** (P2PKH prologue + `bd` + `d0 <tokenRef>` + `dec0e9aa76e378e4a269e69d`) | **byte-identical to V1** — same 75-byte FT-wrapped output, same 12-byte fingerprint |
 | Output-validation epilogue (covenant bytecode) | 107-byte block enforcing the vout[1] reward shape (in pyrxd: `_PART_C`, equal to `_V1_EPILOGUE_SUFFIX[18:]`) | **byte-identical to V1** — the entire 107-byte output-validation block is shared, not just the 12-byte fingerprint |
 
@@ -1925,7 +2002,7 @@ a byte-equal spec, when implementing V1 dMint:
 | 2 | Supports optional `premine: number` | GLYPH deploy uses no premine | Not blocking; defer |
 | 3 | Supports `delegateRef` commit prefix | GLYPH deploy uses no delegate-ref | Not blocking; defer |
 | 4 | `algorithm` and `daaMode` params (V2) | V1 contracts: SHA256D only, no DAA | V1 builders hardcode `algorithm='sha256d'` |
-| 5 | CBOR `v: 1, p: [2, 4]` (V2) | CBOR `p: [1, 4]`, no `v` field (V1) | Wrong keys break RXinDexer classification |
+| 5 | dMint CBOR — current Photonic emits `v: 2, p: [1, 4]` (FT base, same `p` as V1; the V1/V2 split is the **script** state-item count, not `p`). Earlier "`v: 1, p: [2, 4]`" was incorrect (corrected 2026-06-07). | `p: [1, 4]`; mainnet GLYPH omits `v` | The `p` array does NOT break RXinDexer classification — it keys on `p` and handles both |
 
 For V1 dMint deploys, use either a hand-rolled implementation or a
 V1-aware reference (e.g. pyrxd's `prepare_dmint_deploy` in
