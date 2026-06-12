@@ -1,0 +1,25 @@
+# Dependabot configuration for radiant-glyph-guide.
+# docs-only repo — only tracking GitHub Actions updates.
+
+version: 2
+
+updates:
+  # GitHub Actions used in workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "Zyrtnin"
+    assignees:
+      - "Zyrtnin"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
