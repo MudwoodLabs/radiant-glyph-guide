@@ -16,9 +16,16 @@ jobs:
     name: scan for leaked secrets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@main
+      # The SHA pins the wrapper; `version` pins the scanner it runs. The
+      # wrapper does `docker run ghcr.io/trufflesecurity/trufflehog:${VERSION}`
+      # with VERSION defaulting to `latest`, so without `version` this job ran
+      # whatever `latest` was that day. 3.97.9 is what `latest` resolved to on
+      # 2026-10-01, i.e. what this job was already running; the wrapper SHA is
+      # tag v3.97.5, whose action.yml is identical to main's that day.
+      - uses: trufflesecurity/trufflehog@f714bf454f350590f4a24c3ddb1aef02c35bf5b6 # v3.97.5
         with:
+          version: "3.97.9@sha256:52e67fef4d054ecff5c2ce4b4ae376626d1ef54aa0898b53cac19c25e92e14db"
           extra_args: --results=verified,unknown
