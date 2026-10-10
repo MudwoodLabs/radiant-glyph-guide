@@ -240,7 +240,7 @@ Claude automatically generated:
 > **Safe operating model:**
 > 1. Use only the MCP server's read-only tools (the server has no read-only
 >    mode; see the deny-list below the install command): fetch txs, decode
->    scripts, query state. Deny every tool that signs or broadcasts a tx.
+>    scripts, query state. Deny every tool that takes or returns key material, signs, or broadcasts.
 > 2. Keep signing **off the LLM entirely** — the `sign_reveal.js` subprocess
 >    pattern in the README (stdin-only WIF, no argv, no env) is purpose-built
 >    for this. The signer runs on a host the LLM has no shell access to.
@@ -279,7 +279,7 @@ the server name. The Glyph/dMint tools need a host running RXinDexer (its
 
 > **Gotcha:** `-e` takes multiple values, so it must not sit immediately before the server name — otherwise the name is read as an env var and you get "Invalid environment variable format". Put `-e` before another option or after the name.
 
-This registers every tool the server exposes, including ones that take a WIF or mnemonic, sign, or broadcast (checked against radiant-mcp-server@59f6150 `src/register-tools.ts`); the server has no read-only mode. Deny those tools in your Claude Code settings, e.g. `"permissions": {"deny": ["mcp__radiant__radiant_send_rxd", "mcp__radiant__radiant_send_batch", "mcp__radiant__radiant_create_nft", "mcp__radiant__radiant_create_ft", "mcp__radiant__radiant_transfer_token", "mcp__radiant__radiant_burn_token", "mcp__radiant__radiant_broadcast_transaction", "mcp__radiant__radiant_register_key", "mcp__radiant__radiant_create_wallet", "mcp__radiant__radiant_restore_wallet", "mcp__radiant__radiant_derive_address", "mcp__radiant__radiant_build_transaction"]}`.
+This registers every tool the server exposes, including ones that take or return a WIF or mnemonic, sign, or broadcast (checked against radiant-mcp-server@59f6150 `src/register-tools.ts`); the server has no read-only mode. Deny those tools in your Claude Code settings, e.g. `"permissions": {"deny": ["mcp__radiant__radiant_send_rxd", "mcp__radiant__radiant_send_batch", "mcp__radiant__radiant_create_nft", "mcp__radiant__radiant_create_ft", "mcp__radiant__radiant_transfer_token", "mcp__radiant__radiant_burn_token", "mcp__radiant__radiant_broadcast_transaction", "mcp__radiant__radiant_register_key", "mcp__radiant__radiant_create_wallet", "mcp__radiant__radiant_restore_wallet", "mcp__radiant__radiant_derive_address", "mcp__radiant__radiant_build_transaction"]}`.
 
 Restart your Claude Code session after adding. Verify with `claude mcp list`.
 

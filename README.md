@@ -332,9 +332,10 @@ without inheriting every Photonic-shaped bug.
    A checksum file from the same release page does not protect against a
    swapped release on its own; the release also ships `SHA256SUMS.txt.asc` —
    verify it with `gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt` against the
-   release signer's key. (The v3.1.2 release notes do not name a signing-key
-   fingerprint, so obtain the key from a source you trust independently of the
-   release page.)
+   release signer's key. (The GitHub release page does not name the key; the repository does —
+   `doc/release-notes/ANNOUNCEMENT-3.1.2.md` and `contrib/gitian-signing/keys.txt`
+   give `C605 C872 AF05 6272 CE65 0E69 9D24 80A9 7B05 F3B4`, the issuer of the
+   v3.1.2 signature. Cross-check it from a second source before trusting it.)
 
    Asset names and archive layout change between releases (v2.3.0:
    `radiant-core-linux-x64-v2.3.0.tar.gz`, binaries at the archive root;
@@ -1664,10 +1665,10 @@ V2 contracts are mined: for example, mint `a2f186c38d8defff53341059d23136d41a1bd
 (block 439,061) spends a 601-byte, 10-state-item BLAKE3/ASERT contract (the
 one created by that deploy).
 
-Two V2 DAA bytecode generations exist on chain. The contract spent by
+Two V2 DAA bytecode generations exist. The contract spent by
 `a2f186c3` uses the integer power-of-2 ASERT stepper. Photonic switched to a
-fractional "ASERT-v2" on 2026-06-19 (Photonic commit ed53cd4,
-`script.ts`:985–987). Glyph-miner handles both (`blockchain.ts`:845). Compute
+fractional "ASERT-v2" on 2026-06-19 (Photonic commit ed53cd4; comment at
+`script.ts`:985–987 @becf41a). Glyph-miner handles both (`blockchain.ts`:845). Compute
 the next target with the formula that contract's own bytecode encodes (pyrxd
 `compute_next_target_asert_legacy` / `compute_next_target_asert_v2`), not
 Photonic's current one.
@@ -1717,7 +1718,7 @@ across all 32 contracts of a single deploy). **These offsets are GLYPH's.**
 `maxHeight`, `reward` and `target` MUST be minimal script-number pushes, which
 can be OP_0 or OP_1–OP_16 (`00`, `51`–`60`); GLYPH's widths are simply what its
 values need. A non-minimal target can never be minted (pyrxd `builders.py`:1069–1079).
-Mainnet example: `242273d2…5241` vout 0 pushes reward as `5a` (OP_10); that contract is
+Mainnet example: `242273d2c194912f625fcbed00c93dbe9186dea8546857be888a4bf1fade5241` vout 0 pushes reward as `5a` (OP_10); that contract is
 237 B. V1 contracts sampled here run 234–241 B, and the size is not fixed (a
 reward or maxHeight ≥ 2^23 needs a wider push); PXD `c9fdcd34…` vout 0 is 238 B, with
 `bd` at byte 93. **Parse the pushes; never hard-code offsets.** What does
@@ -2077,8 +2078,8 @@ See also: [§16 Common Errors](#common-errors--solutions) and
    FT-wrapped reward output (`P2PKH prologue + OP_STATESEPARATOR + OP_PUSHINPUTREF tokenRef +
    12-byte epilogue`). Plain P2PKH reward outputs will be rejected by the covenant. This applies
    to V1 mints (mainnet-verified against `146a4d68…f3c`) and to V2 mints (the FT-reward check is
-   shared between V1 and V2 contracts). The contract output value must stay
-   constant (singleton — typically 1 photon); the miner funds the reward and fee from a separate
+   shared between V1 and V2 contracts). The covenant requires the recreated
+   contract output to carry exactly 1 photon; the miner funds the reward and fee from a separate
    plain-RXD input. (Compound doc: `dmint-v1-mint-shape-mismatch.md`.)
 
 3. **Bare-byte script classification rejects ~51% of honest miners.** Any check for
@@ -3070,7 +3071,6 @@ First Ledger-signed Glyph UTXO spend confirmed on mainnet: [`22d4e0e07200437791b
 
 ```php
 function calculateFee($rpc, $txSize) {
-    $blockHeight = $rpc->call('getblockcount');
     $minRate = 10000; // photons/byte (the fee floor; the transition period ended at block 415,000)
 
     // Use estimatefee as a signal, but never go below the minimum
@@ -4270,9 +4270,9 @@ See Fee Calculations & Cost Analysis for the post-V2 cost tables.
 Both versions are live on mainnet. V2-shaped dMint contracts appear on mainnet
 from at least block 438,356 (a test contract), and a full V2 deploy with
 reveal was made at block 439,059 (`ca389e30725d0ae8e0a62a2321cdb2ada61b8913d864222c47923ef95a0b05d8`,
-CBOR `v: 2, p: [1, 4]` plus a `dmint` map). Glyph-miner supports the current
-V2 shape (see mint `a2f186c3…531b` at block 439,061, which spends that
-contract), and RXinDexer lists the token as a dMint token. pyrxd deploys and mines V2 by default. Every
+CBOR `v: 2, p: [1, 4]` plus a `dmint` map). Glyph-miner (8f0350d) handles both V2
+ASERT generations (`blockchain.ts`:845). Mint `a2f186c3…531b` (block 439,061)
+spends that deploy's contract, and RXinDexer lists the token as a dMint token. pyrxd deploys and mines V2 by default. Every
 dMint deploy is irreversible, so before deploying either version, confirm
 that the miners you expect your audience to use support the exact contract
 version, algorithm and DAA mode you emit. Photonic notes that V2 deploys made
