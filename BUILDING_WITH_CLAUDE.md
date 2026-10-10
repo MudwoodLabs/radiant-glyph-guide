@@ -38,7 +38,9 @@ This guide documents the experience of building a complete Glyph NFT minting sys
 - IPFS integration for full-resolution photo storage
 
 **Verified Mainnet Transactions:**
-- With on-chain thumbnail: `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e`
+- Glyph NFT reveal (an early test mint — no `main` field, a wrong `in` ref and
+  a truncated CID in `loc`, i.e. the bugs described below):
+  `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e`
 
 ---
 
@@ -57,8 +59,8 @@ After much debugging, we discovered that Glyph wallets look for the `main` field
 **The Solution:**
 ```javascript
 payload.main = {
-    t: 'image/webp',           // MIME type (must match thumbnail format)
-    b: thumbnailUint8Array     // Image data as Uint8Array (NOT base64!)
+    t: thumbnail.type,         // MIME type the browser actually encoded (Safari/iOS: PNG)
+    b: thumbnail.bytes         // Image data as Uint8Array (NOT base64!)
 };
 ```
 
@@ -144,9 +146,13 @@ payload.in = [hexToUint8Array(containerRef)];  // Correct parent!
 ```
 
 **Real-World Example:**
-- Container reveal txid: `4edad6696f9ba2c20b7f81bf135032bf1a781ebca40644c9fc1cd8aa817a3b63`
-- Wrong ref (from txid): `58584137d68cf3eb418cd38cd3bcab8a8e4a8a4150999d7e8e176d956290491300000000`
+- Container reveal txid: `f3f95a8aa35efffd6a3f2064e687de8a58adbd89de891b1ef3f5d291c1d65f68` (commit `58584137…4913`; `4edad669…3b63` is a later transfer of the same NFT)
+- Wrong ref: `58584137d68cf3eb418cd38cd3bcab8a8e4a8a4150999d7e8e176d956290491300000000` (commit txid in display order — not byte-reversed)
 - Correct ref (from script): `13499062956d178e7e9d9950418a4a8e8aabbcd38cd38c41ebf38cd63741585800000000`
+
+(In this example the wrong ref came from the commit txid without byte
+reversal — a different mistake with the same result. Extracting the ref from
+the output script avoids both.)
 
 **The Impact:**
 We minted 20+ test NFTs with wrong refs. They exist on-chain and display in wallets, but they're orphaned - not connected to the container. These NFTs had to be melted and re-minted.
@@ -169,7 +175,8 @@ IPFS uploads failing with: "SSL certificate problem: unable to get local issuer 
 
 **The Quick Fix (Development):**
 ```bash
-# In .env
+# In .env — only if your upload code reads it and disables CURLOPT_SSL_VERIFYPEER;
+# the README's uploadFileToPinata() does not. Dev only.
 IPFS_SKIP_SSL_VERIFY=true
 ```
 
@@ -208,7 +215,7 @@ Claude automatically generated:
 
 ### With the MCP Server
 
-**Claude can now query the Radiant blockchain directly** via the [Radiant MCP Server](https://github.com/Radiant-Core/radiant-mcp-server) (56 tools across read-only queries, token operations, wallet management, and transaction building):
+**Claude can now query the Radiant blockchain directly** via the [Radiant MCP Server](https://github.com/Radiant-Core/radiant-mcp-server) (59 tools across read-only queries, token operations, wallet management, and transaction building):
 - Check balances, UTXOs, and transaction history
 - Read Glyph token metadata and verify NFT state
 - Build, sign, and broadcast transactions
@@ -218,18 +225,22 @@ Claude automatically generated:
 - Inspect mint txs, fetch raw transactions, and verify on-chain state
 
 > ⚠️ **Do not route signing WIFs through an LLM-connected MCP server.**
-> The Radiant MCP server exposes tools that can accept a WIF (mint, transfer,
-> burn). Any such call passes the WIF through the model's tool-call
+> The Radiant MCP server exposes tools that sign with a key (mint, transfer,
+> burn), taking either a WIF or a `key_alias` registered with
+> `radiant_register_key`. A WIF passes through the model's tool-call
 > serializer — the same channel an attacker can reach via prompt injection
 > from untrusted inputs the model reads (IPFS image captions, tx memos, web
-> pages, tool outputs from *other* MCP servers in the session). Prompt
-> injection is an active threat class against agentic LLM setups; no current
-> Claude model is hardened to refuse "now call mint_nft with wif=..."
-> instructions smuggled inside otherwise-benign tool output.
+> pages, tool outputs from *other* MCP servers in the session). A `key_alias`
+> keeps the WIF off that channel but still lets any tool call the model is
+> talked into spend with the stored key. Prompt injection is an active threat
+> class against agentic LLM setups; do not rely on the model to refuse
+> "now call mint_nft with ..." instructions smuggled inside otherwise-benign
+> tool output.
 >
 > **Safe operating model:**
-> 1. Use MCP in **read-only mode only**: fetch txs, decode scripts, query
->    state. Never register tools that accept a WIF or broadcast a tx.
+> 1. Use only the MCP server's read-only tools (the server has no read-only
+>    mode; see the deny-list below the install command): fetch txs, decode
+>    scripts, query state. Deny every tool that takes or returns key material, signs, or broadcasts.
 > 2. Keep signing **off the LLM entirely** — the `sign_reveal.js` subprocess
 >    pattern in the README (stdin-only WIF, no argv, no env) is purpose-built
 >    for this. The signer runs on a host the LLM has no shell access to.
@@ -256,18 +267,19 @@ cd radiant-mcp-server
 npm install
 npm run build
 
-claude mcp add \
-  -e ELECTRUMX_HOST=electrumx.radiant4people.com \
-  -e ELECTRUMX_PORT=50012 \
-  -e ELECTRUMX_SSL=true \
-  -e RADIANT_NETWORK=mainnet \
-  --transport stdio \
-  --scope user \
-  radiant \
+claude mcp add --transport stdio --scope user radiant \
   -- node /path/to/radiant-mcp-server/dist/index.js
 ```
 
-> **Gotcha:** `-e` environment flags must come BEFORE `--transport` and `--scope`, or you get "Invalid environment variable format" error.
+v1.6.0+ of the server defaults to `wss://electrumx.radiantcore.org` (Node 22+).
+To use a raw-TLS ElectrumX host instead, add
+`-e ELECTRUMX_WSS=false -e ELECTRUMX_HOST=<host> -e ELECTRUMX_PORT=50012` after
+the server name. The Glyph/dMint tools need a host running RXinDexer (its
+`glyph.*` / `dmint.*` methods).
+
+> **Gotcha:** `-e` takes multiple values, so it must not sit immediately before the server name — otherwise the name is read as an env var and you get "Invalid environment variable format". Put `-e` before another option or after the name.
+
+This registers every tool the server exposes, including ones that take or return a WIF or mnemonic, sign, or broadcast (checked against radiant-mcp-server@59f6150 `src/register-tools.ts`); the server has no read-only mode. Deny those tools in your Claude Code settings, e.g. `"permissions": {"deny": ["mcp__radiant__radiant_send_rxd", "mcp__radiant__radiant_send_batch", "mcp__radiant__radiant_create_nft", "mcp__radiant__radiant_create_ft", "mcp__radiant__radiant_transfer_token", "mcp__radiant__radiant_burn_token", "mcp__radiant__radiant_broadcast_transaction", "mcp__radiant__radiant_register_key", "mcp__radiant__radiant_create_wallet", "mcp__radiant__radiant_restore_wallet", "mcp__radiant__radiant_derive_address", "mcp__radiant__radiant_build_transaction"]}`.
 
 Restart your Claude Code session after adding. Verify with `claude mcp list`.
 
@@ -284,7 +296,7 @@ Restart your Claude Code session after adding. Verify with `claude mcp list`.
 - Radiant node via Docker (RPC on port 7332)
 - PHP backend for RPC calls
 - JavaScript frontend
-- Node.js 18+ available
+- Node.js 22+ available
 - Windows development machine
 
 I want to implement Glyph NFTs using commit/reveal pattern."
@@ -326,8 +338,8 @@ Before writing any code, ensure:
 
 - [ ] CBOR library downloaded and added to HTML **before** blockchain scripts
 - [ ] Radiant node accessible via RPC
-- [ ] Node.js 18+ installed for signing scripts
-- [ ] `@radiantblockchain/radiantjs` installed
+- [ ] Node.js 22+ installed for signing scripts
+- [ ] `@radiant-core/radiantjs` installed (pinned exact version, lockfile committed)
 - [ ] IPFS provider configured (Pinata recommended)
 
 ---
@@ -341,8 +353,9 @@ Before writing any code, ensure:
 ```
 ❌ BAD: "How do I calculate transaction fees?"
 
-✅ GOOD: "Radiant uses photons/byte for fees (NOT photons/kB like Bitcoin).
-The minimum is 1000 photons/byte (increasing to 10,000 after block 415,000).
+✅ GOOD: "Radiant fees are quoted in photons/byte in my code (the node's
+-minrelaytxfee and estimatefee use RXD/kB). The minimum is 10,000 photons/byte
+(in force since block 415,000; it was 1,000 before).
 Here's my current code that's wrong:
 $fee = ($txSize * $feeRate) / 1000;
 How should I fix this?"
@@ -405,8 +418,8 @@ The full-res upload is failing. What should I check?"
 **Document Each Success:**
 
 ```
-"The NFT with thumbnail worked! Cost was 0.16 RXD.
-Here's the reveal txid: 27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e
+"The NFT with thumbnail worked! Cost was <cost> RXD.
+Here's the reveal txid: <reveal_txid>
 Please document this for future reference."
 ```
 
@@ -424,8 +437,8 @@ const payload = {
     name: "Score: 1,234,567",         // Display name (REQUIRED)
     type: "photo",                    // Type (optional)
     main: {                           // On-chain image (REQUIRED for display!)
-        t: 'image/webp',             // Must match thumbnail format
-        b: thumbnailUint8Array        // NOT base64!
+        t: thumbnail.type,            // Type the browser actually encoded (Safari/iOS: PNG)
+        b: thumbnail.bytes            // NOT base64!
     },
     loc: 'ipfs://Qm...',              // Full-res backup (optional)
     attrs: {                          // Custom attributes (optional)
@@ -471,12 +484,14 @@ async createThumbnail(dataUrl, maxSize = 225, quality = 0.90) {
             ctx.imageSmoothingQuality = 'high';  // Important for quality!
             ctx.drawImage(img, 0, 0, width, height);
 
+            // Safari/iOS cannot encode WebP from a canvas and silently return
+            // PNG, so return the actual type and set main.t from it.
             canvas.toBlob((blob) => {
                 const reader = new FileReader();
                 reader.onload = () => {
-                    const uint8Array = new Uint8Array(reader.result);
-                    console.log(`Thumbnail: ${width}x${height}, ${uint8Array.length} bytes`);
-                    resolve(uint8Array);
+                    const bytes = new Uint8Array(reader.result);
+                    console.log(`Thumbnail: ${width}x${height}, ${bytes.length} bytes (${blob.type})`);
+                    resolve({ bytes, type: blob.type });
                 };
                 reader.onerror = reject;
                 reader.readAsArrayBuffer(blob);
@@ -520,10 +535,12 @@ function encodeGlyphData(data) {
 ### dMint V1 Deploy
 
 A V1 deploy is a multi-contract, heterogeneous-input transaction
-significantly more complex than a standard NFT mint. Read [§7 — dMint V1 Deploy in README.md](README.md#dmint-v1-deploy-multi-contract-structure)
-before prompting Claude to build one. The four gotchas documented there (classifier gap,
-mint-shape mismatch, hashlock-reuse, byte-scan DoS) were each caught only by comparing
-pyrxd's output byte-for-byte against the on-chain GLYPH deploy — not by unit tests alone.
+significantly more complex than a standard NFT mint. Read [§8 — Decentralized Mint (dMint) in README.md](README.md#decentralized-mint-dmint) (deploy shape: [commit](README.md#dmint-deploy-commit-tx-output-shape), [reveal](README.md#dmint-deploy-reveal-tx-io-shape))
+before prompting Claude to build one. Of the four gotchas documented there (classifier gap,
+mint-shape mismatch, hashlock-reuse, byte-scan DoS), three were caught only by checking pyrxd
+against real mainnet bytes (the RBG reveal, a mainnet mint, the GLYPH deploy history) and the
+fourth by reviewing a funding check against honest P2PKH scripts — none by unit tests alone.
+Mainnet now also carries V2 dMint contracts; the README's V1 vs V2 table covers the differences.
 When prompting Claude on dMint deploy code, paste the relevant "Known gotchas" block from
 README.md into the same context window.
 
@@ -540,8 +557,8 @@ README.md into the same context window.
 **Fix:**
 ```javascript
 payload.main = {
-    t: 'image/webp',        // Must match thumbnail format
-    b: thumbnailUint8Array  // Must be Uint8Array!
+    t: thumbnail.type,      // Must match the bytes (Safari/iOS produce PNG)
+    b: thumbnail.bytes      // Must be Uint8Array!
 };
 ```
 
@@ -566,8 +583,8 @@ $fee = ($txSize * $feeRate) / 1000;
 
 **The Fix:**
 ```php
-// CORRECT - Radiant uses photons/byte (photons are Radiant's smallest unit)
-// Pre-V2: 1000 photons/byte. Post-block 415,000: 10,000 photons/byte (10x).
+// CORRECT - $feeRate here is photons/byte (photons are Radiant's smallest unit)
+// Minimum since block 415,000: 10,000 photons/byte (it was 1,000 before).
 $fee = $txSize * $feeRate;
 ```
 
@@ -589,9 +606,11 @@ $singletonScript = 'd8' . $ref . '7576a914' . $pubkeyhash . '88ac';
 
 **The Bug:**
 ```javascript
+// const { Script, Transaction, crypto } = require('@radiant-core/radiantjs');
 // WRONG - Signing with P2PKH only
 const p2pkhScript = Script.buildPublicKeyHashOut(address);
-const sig = Transaction.Sighash.sign(tx, privateKey, sigType, 0, p2pkhScript, amount);
+const sig = Transaction.Sighash.sign(tx, privateKey, sigType, 0, p2pkhScript,
+    new crypto.BN(String(commitAmount)));
 ```
 
 **The Fix:**
@@ -601,7 +620,7 @@ tx.setInputScript(0, (txObj, output) => {
     const sig = Transaction.Sighash.sign(
         txObj, privateKey, sigType, 0,
         output.script,  // ✅ Full nftCommitScript
-        commitAmount
+        new crypto.BN(String(commitAmount))  // radiantjs requires a BN, not a plain number
     );
     // ...
 });
@@ -651,7 +670,8 @@ payload.in = [hexToUint8Array(containerRef)];
 
 **Development Fix:**
 ```bash
-# In .env
+# In .env — only if your upload code reads it and disables
+# CURLOPT_SSL_VERIFYPEER; the README's uploadFileToPinata() does not. Dev only.
 IPFS_SKIP_SSL_VERIFY=true
 ```
 
@@ -683,7 +703,7 @@ console.log('Thumbnail size:', payload.main?.b?.length);
 ```
 
 **4. Check Transaction**
-- View on Glyph Explorer: `https://glyph-explorer.rxd-radiant.com/tx/<txid>`
+- View on an explorer: `https://radiantexplorer.com/tx/<txid>`
 - Verify metadata decodes correctly
 
 ### When Transactions Fail
@@ -707,7 +727,7 @@ radiant-cli sendrawtransaction "0200000001..."
 
 **2. Share with Claude**
 ```
-"Transaction rejected: bad-txns-inputs-outputs-invalid-transaction-reference-operations
+"Transaction rejected: bad-txns-inputs-outputs-invalid-transaction-reference-operations-mempool
 
 Raw TX: 0200000001263c6922...
 Commit txid: 6afb402d...
@@ -717,7 +737,8 @@ What's wrong?"
 
 **3. Compare Against Working Transaction**
 ```
-"Here's a working reveal TX: 27390efab1e3168c...
+"Here's a working reveal TX (compare the structure only — its payload has
+no main field): 27390efab1e3168c...
 And my failing TX: 0200000001...
 
 Can you compare the structures?"
@@ -741,7 +762,7 @@ Before minting to mainnet:
 
 ```
 "Let's test on Radiant testnet first.
-Testnet RPC: localhost:18332
+Testnet RPC: localhost:27332
 
 Create a minimal NFT to verify:
 1. CBOR encoding works
@@ -766,7 +787,7 @@ After minting:
 async mintNFT(imageDataUrl, metadata) {
     // 1. Create thumbnail
     const thumbnail = await this.createThumbnail(imageDataUrl, 225, 0.90);
-    console.log(`Thumbnail: ${thumbnail.length} bytes`);
+    console.log(`Thumbnail: ${thumbnail.bytes.length} bytes (${thumbnail.type})`);
 
     // 2. Upload full-res to IPFS
     const ipfs = await this.uploadToIPFS(imageDataUrl);
@@ -776,14 +797,14 @@ async mintNFT(imageDataUrl, metadata) {
     const payload = {
         p: [2],
         name: metadata.name,
-        main: { t: 'image/webp', b: thumbnail },
+        main: { t: thumbnail.type, b: thumbnail.bytes },
         loc: ipfs.url,
         attrs: metadata.attrs
     };
 
     // 4. Encode and mint
     const glyphData = this.encodeGlyphData(payload);
-    const result = await this.createSingletonNFT(glyphData);
+    const result = await this.mintViaCommitReveal(glyphData); // your commit + reveal flow (README: createCommitTransaction / createRevealTransaction)
 
     return result;
 }
@@ -809,11 +830,11 @@ function encodeGlyphData(data) {
 async createThumbnail(dataUrl, maxSize, quality) {
     const thumbnail = await this._createThumbnail(dataUrl, maxSize, quality);
 
-    if (thumbnail.length > 30000) {
-        console.warn(`Thumbnail large (${thumbnail.length} bytes). Consider reducing.`);
+    if (thumbnail.bytes.length > 30000) {
+        console.warn(`Thumbnail large (${thumbnail.bytes.length} bytes). Consider reducing.`);
     }
 
-    if (thumbnail.length < 1000) {
+    if (thumbnail.bytes.length < 1000) {
         console.warn(`Thumbnail very small. May appear low quality.`);
     }
 
@@ -839,7 +860,7 @@ async createThumbnail(dataUrl, maxSize, quality) {
 
 **AI Development Tools:**
 - Radiant MCP Server: https://github.com/Radiant-Core/radiant-mcp-server
-- AI Knowledge Base: https://github.com/Radiant-Core/radiant-mcp-server/blob/master/docs/RADIANT_AI_KNOWLEDGE_BASE.md
+- AI Knowledge Base: https://github.com/Radiant-Core/radiant-mcp-server/blob/main/docs/RADIANT_AI_KNOWLEDGE_BASE.md
 
 **Ecosystem Tools:**
 - RXinDexer (token indexer): https://github.com/Radiant-Core/RXinDexer
@@ -847,7 +868,7 @@ async createThumbnail(dataUrl, maxSize, quality) {
 
 **Explorers:**
 - Mainnet: https://explorer.radiantblockchain.org
-- Glyph explorer: https://glyph-explorer.rxd-radiant.com
+- Transaction links: `https://radiantexplorer.com/tx/<txid>`
 
 ### Example Prompts for Common Tasks
 
@@ -942,7 +963,7 @@ Claude AI is a powerful partner for Radiant blockchain development. The key disc
 - With 225px WebP thumbnail: ~0.22 / ~2.2 RXD
 - With 150px JPEG (budget): ~0.07 / ~0.69 RXD
 
-> Post-block 415,000: minimum relay fee increases 10x. Use `estimatefee` RPC instead of hardcoding.
+> Post-block 415,000: minimum relay fee is 10x (0.1 RXD/kB). Compute the floor from block height; `estimatefee` returns only the legacy floor unless the mempool is congested, so never pay less than 0.1 RXD/kB.
 
 Happy building on Radiant!
 
@@ -962,7 +983,7 @@ Post in #development with:
 
 ---
 
-**Last Updated:** 2026-04-16
+**Last Updated:** 2026-10-10
 **Author:** Radiant Developer Community
 **License:** MIT - Free to use and share
 
