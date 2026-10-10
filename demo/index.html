@@ -222,16 +222,15 @@
 <body>
     <div class="container">
         <h1>Radiant Glyph NFT - Documentation Test</h1>
-        <p class="subtitle">Testing the implementation guide - Goes through all steps EXCEPT final broadcast</p>
+        <p class="subtitle">Testing the implementation guide - builds the payload and scripts only; no transaction is built, signed or broadcast</p>
 
         <div class="warning">
             <div class="warning-title">Test Mode - No Broadcasting</div>
             This implementation follows the guide exactly and will:
             <ol style="margin-left: 20px; margin-top: 10px;">
                 <li>Create and encode CBOR glyph data (with thumbnail)</li>
-                <li>Build commit transaction hex</li>
-                <li>Build reveal transaction hex</li>
-                <li><strong>STOP before broadcasting</strong> (shows signed hex for verification)</li>
+                <li>Build the commit script and singleton output script (mock txid/pubkeyhash)</li>
+                <li><strong>No transaction is built, signed or broadcast</strong></li>
             </ol>
         </div>
 
@@ -254,7 +253,7 @@
                 <label for="imageUpload">Select Image *</label>
                 <input type="file" id="imageUpload" accept="image/*" required>
                 <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                    Will be resized to 225px WebP @ 90% quality (~20-25KB)
+                    Will be resized to 225px WebP @ 90% quality (~20-25KB) in Chrome/Firefox; Safari/iOS fall back to PNG
                 </div>
                 <div id="imagePreview" class="image-preview empty">
                     No image selected
@@ -356,13 +355,14 @@
                     ctx.imageSmoothingQuality = 'high';
                     ctx.drawImage(img, 0, 0, width, height);
 
-                    // Convert to WebP for best quality/size ratio
+                    // Request WebP. Safari/iOS cannot encode WebP from a canvas and
+                    // silently return PNG, so return the type actually produced.
                     canvas.toBlob((blob) => {
                         const reader = new FileReader();
                         reader.onload = () => {
-                            const uint8Array = new Uint8Array(reader.result);
-                            console.log(`Thumbnail: ${width}x${height}, ${uint8Array.length} bytes (WebP @ ${quality * 100}%)`);
-                            resolve(uint8Array);
+                            const bytes = new Uint8Array(reader.result);
+                            console.log(`Thumbnail: ${width}x${height}, ${bytes.length} bytes (${blob.type} @ ${quality * 100}%)`);
+                            resolve({ bytes, type: blob.type });
                         };
                         reader.onerror = reject;
                         reader.readAsArrayBuffer(blob);
@@ -558,8 +558,8 @@
                     name: name,
                     type: 'photo',
                     main: {
-                        t: 'image/webp',
-                        b: thumbnail
+                        t: thumbnail.type,
+                        b: thumbnail.bytes
                     },
                     attrs: attrs
                 };
@@ -586,7 +586,7 @@
                 const mockCommitVout = 0;
                 const singletonResult = buildSingletonScript(mockCommitTxid, mockCommitVout, mockPubkeyhash);
 
-                addStep('All transaction data prepared successfully!', true);
+                addStep('Payload and scripts prepared successfully!', true);
 
                 // Display verification data
                 const verificationHtml = `
@@ -611,24 +611,24 @@
                         <div class="code-block">${singletonResult.script.substring(0, 200)}...</div>
                     </div>
                     <div style="margin-bottom: 20px;">
-                        <strong>Thumbnail Size:</strong> ${thumbnail.length} bytes (${(thumbnail.length / 1024).toFixed(2)} KB)<br>
+                        <strong>Thumbnail Size:</strong> ${thumbnail.bytes.length} bytes (${(thumbnail.bytes.length / 1024).toFixed(2)} KB, ${thumbnail.type})<br>
                         <strong>Total Glyph Data:</strong> ${glyphData.length} bytes (${(glyphData.length / 1024).toFixed(2)} KB)<br>
-                        <strong>Estimated Cost:</strong> ~${(glyphData.length * 0.00001).toFixed(4)} RXD
+                        <strong>Estimated Cost:</strong> ~${(glyphData.length * 0.0001).toFixed(4)} RXD
                     </div>
                 `;
                 document.getElementById('verificationData').innerHTML = verificationHtml;
 
                 showStatus('success', `
                     <strong>Documentation Test: PASSED</strong><br><br>
-                    All transaction components built successfully using only the documentation guide!<br><br>
+                    Payload and script components built successfully using only the documentation guide!<br><br>
                     <strong>What was created:</strong><br>
                     - CBOR-encoded glyph data (${glyphData.length} bytes)<br>
                     - nftCommitScript with payload validation<br>
                     - Singleton ref output script<br>
-                    - On-chain thumbnail (${thumbnail.length} bytes WebP)<br><br>
+                    - On-chain thumbnail (${thumbnail.bytes.length} bytes, ${thumbnail.type})<br><br>
                     <strong>To complete minting, you would need:</strong><br>
                     1. Radiant node RPC access to create/sign/broadcast transactions<br>
-                    2. Wallet with sufficient RXD balance (~${(glyphData.length * 0.00001 + 0.01).toFixed(4)} RXD)<br>
+                    2. Wallet with sufficient RXD balance (~${(glyphData.length * 0.0001 + 0.01).toFixed(4)} RXD)<br>
                     3. Node.js signing script with radiantjs library<br><br>
                     <strong>Next steps:</strong> See "Complete Implementation Example" section in the guide.
                 `);
