@@ -238,8 +238,9 @@ Claude automatically generated:
 > tool output.
 >
 > **Safe operating model:**
-> 1. Use MCP in **read-only mode only**: fetch txs, decode scripts, query
->    state. Never register tools that accept a WIF or broadcast a tx.
+> 1. Use only the MCP server's read-only tools (the server has no read-only
+>    mode; see the deny-list below the install command): fetch txs, decode
+>    scripts, query state. Deny every tool that signs or broadcasts a tx.
 > 2. Keep signing **off the LLM entirely** — the `sign_reveal.js` subprocess
 >    pattern in the README (stdin-only WIF, no argv, no env) is purpose-built
 >    for this. The signer runs on a host the LLM has no shell access to.
@@ -277,6 +278,8 @@ the server name. The Glyph/dMint tools need a host running RXinDexer (its
 `glyph.*` / `dmint.*` methods).
 
 > **Gotcha:** `-e` takes multiple values, so it must not sit immediately before the server name — otherwise the name is read as an env var and you get "Invalid environment variable format". Put `-e` before another option or after the name.
+
+This registers every tool the server exposes, including signing and broadcast ones; the server has no read-only mode. Deny those tools in your Claude Code settings, e.g. `"permissions": {"deny": ["mcp__radiant__radiant_send_rxd", "mcp__radiant__radiant_send_batch", "mcp__radiant__radiant_create_nft", "mcp__radiant__radiant_create_ft", "mcp__radiant__radiant_transfer_token", "mcp__radiant__radiant_burn_token", "mcp__radiant__radiant_broadcast_transaction", "mcp__radiant__radiant_register_key", "mcp__radiant__radiant_create_wallet"]}`.
 
 Restart your Claude Code session after adding. Verify with `claude mcp list`.
 
@@ -865,7 +868,7 @@ async createThumbnail(dataUrl, maxSize, quality) {
 
 **Explorers:**
 - Mainnet: https://explorer.radiantblockchain.org
-- Glyph explorer: https://glyph-explorer.rxd-radiant.com
+- Transaction links: `https://radiantexplorer.com/tx/<txid>`
 
 ### Example Prompts for Common Tasks
 
@@ -980,7 +983,7 @@ Post in #development with:
 
 ---
 
-**Last Updated:** 2026-05-13
+**Last Updated:** 2026-10-10
 **Author:** Radiant Developer Community
 **License:** MIT - Free to use and share
 
