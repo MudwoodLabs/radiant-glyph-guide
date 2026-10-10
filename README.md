@@ -5,7 +5,7 @@
 > **Guide version:** see the [Changelog](#changelog) at the bottom.
 > **Protocol baseline:** Radiant V2 (block 410,000) + post-V2 fees (block 415,000).
 > **Last on-chain verification:** see the [Verified Working Transactions](#verified-working-transactions-january-2026) section for mainnet txids that back the claims in this document.
-> **Integrity (read BEFORE pasting into an AI agent):** the canonical source is `Zyrtnin-org/radiant-glyph-guide` on GitHub. Before pasting into an agent session that has file-write or network access, clone the repo (`git clone https://github.com/Zyrtnin-org/radiant-glyph-guide`), run `git log --oneline` to see the commit history, and diff the current `README.md` against an earlier commit you recognize (e.g. `git diff <known-good-commit>..HEAD README.md`). A compromised fork or a commit injected by an attacker could add instructions that exfiltrate keys or insert backdoors into signing code — and you will not see the injection just by reading the rendered markdown.
+> **Integrity (read BEFORE pasting into an AI agent):** the canonical source is `MudwoodLabs/radiant-glyph-guide` on GitHub. Before pasting into an agent session that has file-write or network access, clone the repo (`git clone https://github.com/MudwoodLabs/radiant-glyph-guide`), run `git log --oneline` to see the commit history, and diff the current `README.md` against an earlier commit you recognize (e.g. `git diff <known-good-commit>..HEAD README.md`). A compromised fork or a commit injected by an attacker could add instructions that exfiltrate keys or insert backdoors into signing code — and you will not see the injection just by reading the rendered markdown.
 
 This guide provides everything you need to implement Glyph NFTs on the Radiant blockchain, updated for **V2** (block 410,000+). It includes critical discoveries from real-world implementation, all 11 Glyph protocol types, V2 opcode reference, and updated fee calculations for the post-V2 fee increase.
 
@@ -16,9 +16,9 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
 > - **First FT integration?** → Read section 7 (Fungible Tokens) for the 75-byte template + wallet classifier patterns
 > - **First dMint deploy or mint?** → Read [section 8 (Decentralized Mint)](#decentralized-mint-dmint) for the V1 contract layout, deploy commit/reveal shape, [V1 mint tx mechanics](#v1-mint-tx-mechanics-mainnet-verified) (4-output shape, 72-byte mint scriptSig, PoW preimage layout), and Photonic-master divergences. See also the [byte-decoded GLYPH reference deploy and snk/PXD mint txs](#verified-working-transactions-january-2026).
 > - **Writing a covenant or token-aware contract?** → Read [Avoid Phantom Refs in Embedded Bytecode](#constructing-covenants-avoid-phantom-refs-in-embedded-bytecode) and [NFT Conservation Has No Consensus "Exactly One" Rule](#nft-conservation-has-no-consensus-exactly-one-rule): an FT cannot be held in a foreign covenant (gate its spend path); an NFT can. For ref-authenticity checks against an indexer, see [Resolving a Ref via RXinDexer](#resolving-a-ref-via-rxindexer).
-> - **Debugging a failed mint?** → Jump to section 15 (Common Errors) and the Appendix (opcodes, hex values)
-> - **Upgrading to V2?** → Read section 19 (What's New in V2) and the Fee Calculations section for updated costs
-> - **Hardware wallet (Ledger) support?** → See [`radiant-ledger-guide`](https://github.com/Zyrtnin-org/radiant-ledger-guide). Minting still requires software signing; receiving + spending Glyph UTXOs works with the community Ledger app
+> - **Debugging a failed mint?** → Jump to section 16 (Common Errors) and the Appendix (opcodes, hex values)
+> - **Upgrading to V2?** → Read section 20 (What's New in V2) and the Fee Calculations section for updated costs
+> - **Hardware wallet (Ledger) support?** → See [`radiant-ledger-guide`](https://github.com/MudwoodLabs/radiant-ledger-guide). Minting still requires software signing; receiving + spending Glyph UTXOs works with the community Ledger app
 > - **Using Claude with MCP?** → See [BUILDING_WITH_CLAUDE.md](BUILDING_WITH_CLAUDE.md) for MCP setup and workflow tips
 
 ---
@@ -48,7 +48,7 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
    - [dMint CBOR token body](#dmint-cbor-token-body-revealed-in-vin0)
    - [Photonic Wallet divergences](#photonic-wallet-divergences-v1-dmint)
    - [Finding the deploy reveal from a commit txid](#finding-the-deploy-reveal-from-a-commit-txid-scripthash-history-gotcha)
-   - [Known gotchas](#dmint-deploy-known-gotchas)
+   - [Known gotchas](#known-gotchas)
 9. [CBOR Payload Format](#cbor-payload-format)
 10. [Commit Transaction](#commit-transaction)
 11. [Reveal Transaction](#reveal-transaction)
@@ -163,8 +163,7 @@ chains before, most will be familiar; a few are Radiant/Glyph-specific.
   differ from the commit address — typical pattern is commit = platform
   wallet, destAddress = player wallet.
 - **Photonic Wallet / radiantjs** — The canonical browser wallet for Radiant
-  and its underlying JS library. This guide uses radiantjs (via
-  `require('@radiantblockchain/radiantjs')`) as the server-side signer.
+  and its underlying JS library (Photonic currently depends on `@radiant-core/radiantjs`). This guide's signer examples require `@radiantblockchain/radiantjs` (the older `chainbow` fork, same API family, different package name) as the server-side signer.
 - **Glyphium / Glyph Explorer** — Community wallets and block explorers that
   render Glyph-protocol NFTs. `https://glyph-explorer.rxd-radiant.com` is the
   usual explorer URL.
@@ -227,10 +226,11 @@ WRONG:   d824<ref>7576a914...  // The 24 breaks it
 
 ## Prerequisites
 
-> **Two GitHub orgs host Radiant code.** Both `github.com/RadiantBlockchain/*`
-> and `github.com/Radiant-Core/*` are real and active as of 2026-04. This guide
-> uses specific-path links (e.g. `RadiantBlockchain/radiant-node` for the node
-> itself, `Radiant-Core/radiant-mcp-server` for the MCP server). **Before
+> **Radiant code lives in `github.com/Radiant-Core/*`.** The older
+> `github.com/RadiantBlockchain/*` account (radiant-node, radiantjs,
+> electron-radiant, electrumx) has had no commits since 2024-07-28 and is not
+> maintained. This guide uses `Radiant-Core/Radiant-Core` for the node and
+> `Radiant-Core/radiant-mcp-server` for the MCP server. **Before
 > cloning or installing any dependency this guide links to, verify on
 > [radiantblockchain.org](https://radiantblockchain.org) or in the
 > `#dev` / `#announcements` channels of the Radiant Discord that you are
@@ -275,18 +275,16 @@ without inheriting every Photonic-shaped bug.
 
 ### Software Requirements
 
-1. **Radiant Node** (v2.3.0 or newer, wallet-enabled build).
+1. **Radiant Node** (wallet-enabled build). This guide's examples were verified against v2.3.0; the current release is v3.1.2, and v3.1.1 or newer is mandatory for mainnet operators (script-security soft fork at block 440,000).
 
    The wallet-capability story is not obvious from release titles:
-   - **v2.1.2**: prebuilt linux-x64 tarballs on GitHub releases are actually ARM64
-     binaries mislabeled as x64. On an Intel/AMD host you'll hit "Exec format error".
-     Build from source or upgrade.
+   - **v2.1.2**: prebuilt linux-x64 tarball is an x86-64 build but ships without wallet support (no `listwallets` / `dumpprivkey`), so it is unusable here. Build from source or upgrade.
    - **v2.2.0**: prebuilt linux-x64 runs on x86_64 but **ships without wallet support**
      compiled in. `listwallets`, `listunspent`, `dumpprivkey`, and
      `signrawtransactionwithwallet` all return `-32601 Method not found`. Every
      minting flow in this guide depends on wallet RPCs, so v2.2.0 is unusable here.
-   - **v2.3.0+**: prebuilt linux-x64, wallet-enabled. This is the first release
-     the guide's examples have been verified against.
+   - **v2.3.0**: prebuilt linux-x64 (`radiant-core-linux-x64-v2.3.0.tar.gz`), wallet-enabled. This is the first release the guide's examples have been verified against.
+   - **v3.1.x**: the prebuilt linux-x64 download is `radiant-core-gui-linux-x64-v<ver>.tar.gz` (contains `radiantd` and `radiant-cli`, wallet-enabled; has a `.sha256` file). v3.0.0 changed the default HD derivation path to `m/44'/512'/0'/0/k`.
 
    Verify your binary actually has the wallet before proceeding:
    ```bash
@@ -316,9 +314,9 @@ without inheriting every Photonic-shaped bug.
    ```dockerfile
    ARG RADIANT_VERSION=2.3.0
    ARG RADIANT_SHA256=<paste-from-release-page>
-   RUN curl -fsSLO "https://github.com/RadiantBlockchain/radiant-node/releases/download/v${RADIANT_VERSION}/radiant-core-${RADIANT_VERSION}-linux-x64.tar.gz" && \
-       echo "${RADIANT_SHA256}  radiant-core-${RADIANT_VERSION}-linux-x64.tar.gz" | sha256sum -c - && \
-       tar xzf "radiant-core-${RADIANT_VERSION}-linux-x64.tar.gz"
+   RUN curl -fsSLO "https://github.com/Radiant-Core/Radiant-Core/releases/download/v${RADIANT_VERSION}/radiant-core-linux-x64-v${RADIANT_VERSION}.tar.gz" && \
+       echo "${RADIANT_SHA256}  radiant-core-linux-x64-v${RADIANT_VERSION}.tar.gz" | sha256sum -c - && \
+       tar xzf "radiant-core-linux-x64-v${RADIANT_VERSION}.tar.gz"
    ```
 
    If upstream releases change archive layout between minor versions
@@ -331,16 +329,14 @@ without inheriting every Photonic-shaped bug.
    matching `radiant.conf` settings when the node and your PHP backend run in
    separate Docker containers.
 
-2. **Node.js** - v20+ for signing scripts (v18 EOL, v24 works for our needs).
+2. **Node.js** - a supported release for signing scripts (v22 or v24; v18 and v20 are EOL).
    ```bash
    node --version  # Should be 20.x or higher
    ```
 
 3. **radiantjs Library** - For transaction signing.
 
-   `@radiantblockchain/radiantjs` is **not published on the npm registry.**
-   Install the `chainbow` fork from GitHub — ideally pinned to a commit SHA
-   you've reviewed, since this library sits directly in your signing path:
+   `@radiantblockchain/radiantjs` is **not published on the npm registry** (404 on 2026-10-10). The maintained fork is `@radiant-core/radiantjs` (github.com/Radiant-Core/radiantjs, published on npm, 2.0.6); the `chainbow` fork these examples were written against has had no commits since 2024-03-22. Whichever you use, pin a commit SHA or exact version you've reviewed, since this library sits directly in your signing path:
    ```bash
    # Pin to a specific commit for reproducibility + supply-chain safety
    npm install github:chainbow/radiantjs#<commit-sha>
@@ -383,7 +379,7 @@ without inheriting every Photonic-shaped bug.
    **For browser/frontend - Download and include in HTML:**
    ```bash
    # Pin to a specific 40-char commit SHA from https://github.com/paroga/cbor-js/commits/master
-   # (no release tags exist). Review the diff from whatever commit you pick back
+   # (only one tag exists, v0.1.0 from 2015; master is 65dc49611107db83aff8308a6b381f4d7933824b, 2016-09-22). Review the diff from whatever commit you pick back
    # to the oldest commit you trust before vendoring.
    COMMIT="<40-hex-char-commit-sha>"
 
@@ -642,7 +638,7 @@ sides of the bridge.
 ### Calling the Signer from PHP
 
 The Signing Challenge section later in this guide shows a Node.js script
-(`scripts/sign_reveal.js`) that builds and signs the reveal transaction. It has
+(save it as `scripts/sign_reveal.js`) that builds and signs the reveal transaction. It has
 to be a subprocess because PHP's wallet RPCs can't sign the non-standard
 `nftCommitScript`. Getting PHP to actually *invoke* it reliably in a Dockerized
 deployment has a few sharp edges.
@@ -1092,7 +1088,7 @@ When building (not decoding), follow the convention: emit raw bytes
 without a tag wrapper for new mints — the unwrap is purely a decode-side
 compatibility shim for Photonic-built tokens already on chain.
 Implementation reference: pyrxd `src/pyrxd/glyph/payload.py`
-`decode_payload`'s CBORTag-64 unwrap (lines 115–122).
+`decode_payload`'s CBORTag-64 unwrap (pyrxd 6207b5b8).
 
 ---
 
@@ -1132,10 +1128,10 @@ ref = reversed(commitTxid) + littleEndian(commitVout)
 **Example:**
 ```javascript
 Commit TXID: 6afb402d085b2214b44853dad42499b5a02b823153e2789bb2bfb0e522693c26
-Reversed:    263c6922e5b0bfb29b78e25331823ba0b59924d4da5348b414225b082d40fb6a
+Reversed:    263c6922e5b0bfb29b78e25331822ba0b59924d4da5348b414225b082d40fb6a
 Vout: 0
 Vout LE:     00000000
-Ref:         263c6922e5b0bfb29b78e25331823ba0b59924d4da5348b414225b082d40fb6a00000000
+Ref:         263c6922e5b0bfb29b78e25331822ba0b59924d4da5348b414225b082d40fb6a00000000
 ```
 
 ---
@@ -1213,7 +1209,7 @@ Byte layout:
   a2 69 e6 9d
 ```
 
-**What the epilogue does** (source: [`interpreter.cpp:2167-2204`](https://github.com/RadiantBlockchain/radiant-node/blob/master/src/script/interpreter.cpp#L2167)):
+**What the epilogue does** (source: [`interpreter.cpp:2389-2426`](https://github.com/Radiant-Core/Radiant-Core/blob/9cd72aa98ea03378e4b0f2ac4025202963267516/src/script/interpreter.cpp#L2389-L2426)):
 
 The 12-byte suffix encodes the FT conservation law. The two key introspection
 opcodes in the sequence are:
@@ -1229,7 +1225,7 @@ manipulation, comparison, hashing — e.g. `76 = OP_DUP`, `a2 = OP_GREATERTHANOR
 `aa`, `78`) that feed the state-aware values into the comparison. Calling
 them "standard Bitcoin" would be misleading — several are Radiant additions.
 Together they wire the two sums into the conservation check. A full opcode-by-opcode decode is available in
-[`radiant-ledger-app/docs/solutions/integration-issues/radiant-glyph-ft-template-and-view-only-renderer.md`](https://github.com/Zyrtnin-org/radiant-ledger-app) — for this guide, the important
+[`radiant-ledger-app/docs/solutions/integration-issues/radiant-glyph-ft-template-and-view-only-renderer.md`](https://github.com/MudwoodLabs/radiant-ledger-app/blob/d7427359f3a9a3393bf769c43a0a17c84ee1ec92/docs/solutions/integration-issues/radiant-glyph-ft-template-and-view-only-renderer.md) — for this guide, the important
 takeaway is that together they enforce **Σ input photons ≥ Σ output photons**
 per codeScript hash — tokens cannot be inflated by a normal spend. Only the
 mint-authority script (241 bytes, not documented here) can create new supply.
@@ -1308,7 +1304,7 @@ Key differences from NFT CBOR:
 For wallet developers integrating Glyph support — three regex patterns
 that classify every mainnet-observed spendable script shape. Tested against
 13 golden vectors from real mainnet (2,309 samples, 6 tokens, 500 blocks)
-in [`radiant-ledger-app/view-only-ui/fixtures/classifier-vectors.json`](https://github.com/Zyrtnin-org/radiant-ledger-app).
+in [`radiant-ledger-app/view-only-ui/fixtures/classifier-vectors.json`](https://github.com/MudwoodLabs/radiant-ledger-app/blob/d7427359f3a9a3393bf769c43a0a17c84ee1ec92/view-only-ui/fixtures/classifier-vectors.json).
 
 ```
 Plain P2PKH (25B):   ^76a914[0-9a-f]{40}88ac$
@@ -1335,9 +1331,9 @@ The 241-byte FT control/authority scripts intentionally do NOT match any of
 these patterns — they correctly classify as `unknown` and should not be surfaced
 to users as spendable outputs.
 
-Reference implementation: [`classifier.mjs`](https://github.com/Zyrtnin-org/radiant-ledger-app/blob/main/view-only-ui/classifier.mjs) (pure ES module, 83 lines, no dependencies).
+Reference implementation: [`classifier.mjs`](https://github.com/MudwoodLabs/radiant-ledger-app/blob/d7427359f3a9a3393bf769c43a0a17c84ee1ec92/view-only-ui/classifier.mjs) (pure ES module, 101 lines at that commit, no imports).
 
-**dMint contract outputs** (241 bytes, V1 shape) do not match any of the three patterns above
+**dMint contract outputs** (state + the fixed 145-byte epilogue; 241 bytes for GLYPH, 234-240 bytes for other mainnet deploys) do not match any of the three patterns above
 and will classify as `unknown`. This is correct for wallet display — they are not user-spendable.
 However, an explorer or dMint-aware tool must NOT silently discard them. Detect them by parsing
 the script as an opcode stream and looking for `OP_STATESEPARATOR` (`0xbd`) at byte 96 (preceded
@@ -1422,9 +1418,9 @@ function isTokenBearing(scriptHex) {
 }
 ```
 
-Canonical pyrxd implementation: `src/pyrxd/glyph/dmint.py`
-`is_token_bearing_script` (lines 1549–1610) and its load-bearing call
-site in `find_dmint_funding_utxo` (lines 2157–2246).
+Canonical pyrxd implementation: `src/pyrxd/glyph/dmint/chain.py`
+`is_token_bearing_script` and its load-bearing call
+site in `find_dmint_funding_utxo` (pyrxd 6207b5b8).
 
 **Treat truncated push fields as token-bearing.** A malformed script of
 ambiguous length should not be admitted as funding — refuse it. This
@@ -1649,12 +1645,12 @@ canonical reference is the GLYPH (Glyph Protocol) deploy at:
 - Reveal: `b965b32dba8628c339bc39a3369d0c46d645a77828aeb941904c77323bb99dd6` (h=228,604)
 - Params: 32 parallel contracts, max_height=625,000, reward=50,000 sats per mint, target=`0x00da740da740da74`, SHA256D, no DAA. Total supply = 32 × 625,000 × 50,000 = 1,000,000,000,000 sats = 10,000 GLYPH @ 8 decimals.
 
-The current `master` branch of Photonic Wallet's `dMintScript()`
-(`packages/lib/src/script.ts` lines 704–766) emits the V2 10-state-item
+The current `main` branch of Photonic Wallet (`Radiant-Core/Photonic-Wallet@becf41a731e7`)'s `dMintScript()`
+(`packages/lib/src/script.ts`, defined at line 1457) emits the V2 10-state-item
 layout **only** — it cannot produce a deploy that interoperates with
 existing miners. Builders must implement V1 explicitly or borrow a V1
 reference implementation (e.g. pyrxd's `build_dmint_v1_contract_script`
-in `src/pyrxd/glyph/dmint.py`).
+in `src/pyrxd/glyph/dmint/builders.py`).
 
 ### V1 contract UTXO byte layout (241 B = state[96] + epilogue[145])
 
@@ -1741,8 +1737,8 @@ identical against both):
 
 | Token | Mint txid | Notes |
 |---|---|---|
-| snk | `146a4d688ba3fc1ea9588e406cc6104be2c9321738ea093d6db8e1b83581af3c` | block 422,865 (2026-01); documented in `pyrxd/docs/dmint-research-mainnet.md` §4 |
-| PXD | `c9fdcd3488f3e396bec3ce0b766bb8070963e7e75bb513b8820b6663e469e530` | 2026-05-11; independent confirmation at a different timestamp, same I/O shape, same 72-byte mint scriptSig layout. Deploy reveal: `8eeb333943771991c2752abc78038365ecd76b1a24426f7a3212eea71b6a6564`. |
+| GLYPH (mint msg `snk [r2w]`) | `146a4d688ba3fc1ea9588e406cc6104be2c9321738ea093d6db8e1b83581af3c` | block 422,865 (2026-04-23); documented in `pyrxd/docs/dmint-research-mainnet.md` §4 |
+| PXD | `c9fdcd3488f3e396bec3ce0b766bb8070963e7e75bb513b8820b6663e469e530` | 2026-05-12 UTC; independent confirmation at a different timestamp, same I/O shape, same 72-byte mint scriptSig layout. Deploy reveal: `8eeb333943771991c2752abc78038365ecd76b1a24426f7a3212eea71b6a6564`. |
 
 #### Inputs
 
@@ -1913,9 +1909,9 @@ check. Use length-aware push selection.
 ### Photonic Wallet divergences (V1 dMint)
 
 The Photonic Wallet reference implementation
-(`RadiantBlockchain-Community/photonic-wallet@master`) is the
+(`Radiant-Core/Photonic-Wallet@becf41a731e7`, branch `main`) is the
 canonical TypeScript source for Glyph primitives, but for V1 dMint
-specifically the master branch diverges from on-chain reality in five
+specifically the main branch diverges from on-chain reality in five
 documented ways. Treat Photonic as a useful pattern reference, not as
 a byte-equal spec, when implementing V1 dMint:
 
@@ -1930,7 +1926,7 @@ a byte-equal spec, when implementing V1 dMint:
 For V1 dMint deploys, use either a hand-rolled implementation or a
 V1-aware reference (e.g. pyrxd's `prepare_dmint_deploy` in
 `src/pyrxd/glyph/builder.py`, which calls `build_dmint_v1_contract_script`
-from `src/pyrxd/glyph/dmint.py`).
+from `src/pyrxd/glyph/dmint/builders.py`).
 
 ### Finding the deploy reveal from a commit txid (scripthash-history gotcha)
 
@@ -1948,14 +1944,15 @@ first. The indexer returns both. The real GLYPH deploy's hashlock
 scripthash has 4 history entries:
 
 ```
-228398  d171b184…1597   ← earlier failed attempt (same script bytes)
-228398  6de766d7…3eaf   ← spends d171b184:0 to refund
+228398  d171b184…1597   ← earlier 10-contract deploy commit (same hashlock script bytes)
+228398  6de766d7…f6ed   ← its reveal (spends d171b184:0–12)
 228604  a443d9df…878b   ← the real deploy commit
 228604  b965b32d…9dd6   ← the real deploy reveal
 ```
 
-A "first non-commit entry" heuristic picks `d171b184…1597`, which has
-zero V1 contract outputs and only P2PKH outputs.
+A "first non-commit entry" heuristic picks `d171b184…1597`, which is
+another commit (two 75-byte hashlocks plus P2PKH outputs) and has no V1 contract
+outputs.
 
 **Correct disambiguation:** among the history candidates, pick the tx
 whose **inputs actually spend `commit_txid:0`**. Only the real reveal
@@ -1974,14 +1971,14 @@ for entry in history:
 ```
 
 Reference implementation:
-`_find_v1_contract_utxos_walk` in `pyrxd.glyph.dmint`
-(`src/pyrxd/glyph/dmint.py` lines 2510–2564). The same principle —
+`_find_v1_contract_utxos_walk` in `pyrxd.glyph.dmint.chain`
+(`src/pyrxd/glyph/dmint/chain.py`, pyrxd 6207b5b8). The same principle —
 scripthash queries are coarse; you must filter by outpoint — applies to
 any "find the spending tx" pattern over scripthash history.
 
-#### Known gotchas {#dmint-deploy-known-gotchas}
+#### Known gotchas
 
-See also: [§14 Common Errors](#common-errors--solutions) and
+See also: [§16 Common Errors](#common-errors--solutions) and
 [§7 — Wallet Classifier Patterns](#wallet-classifier-patterns).
 
 1. **V1 contract outputs classify as `unknown` in V2-only parsers.** The on-chain V1 contract
@@ -2106,7 +2103,7 @@ via dMint." Combinations like `[2, 7]` (NFT that is also a container) are valid.
 element is the primary type; subsequent elements are modifiers. `p: [4]` alone (dMint
 without an FT or NFT base type) has not been observed on mainnet — all known dMint
 deployments use `[1, 4]` (FT + dMint). For the full commit/reveal structure of a V1 `[1, 4]`
-deploy, see [§7 — dMint V1 Deploy](#dmint-v1-deploy-multi-contract-structure).
+deploy, see [§8 — Decentralized Mint (dMint)](#decentralized-mint-dmint).
 
 **V1 vs V2 deploys differ in the CBOR shape itself.** V1 (the only
 on-chain reality so far) emits `p: [1, 4]` with no `v` field and no
@@ -2349,7 +2346,7 @@ Apply the cap **before** invoking the CBOR library — most CBOR
 libraries will happily allocate a multi-megabyte buffer before they
 know the structure of the input. Implementation reference: pyrxd
 `src/pyrxd/glyph/payload.py` `_MAX_CBOR_PAYLOAD_BYTES` constant and
-the size-cap precheck (lines 51, 94–95).
+the size-cap precheck in `decode_payload` (pyrxd 6207b5b8).
 
 ### Glyph Data Format
 
@@ -2640,7 +2637,7 @@ for example, has **four** history entries:
 ```
 height  txid                                       what it is
 228398  d171b184…1597   ← earlier failed deploy attempt (same script bytes)
-228398  6de766d7…3eaf   ← refund spending d171b184:0
+228398  6de766d7…f6ed   ← reveal of the d171b184 10-contract deploy
 228604  a443d9df…878b   ← the real deploy commit
 228604  b965b32d…9dd6   ← the real deploy reveal
 ```
@@ -2779,8 +2776,7 @@ A correct walker on the GLYPH deploy reveal produces a push-stack
 whose item-2 is `676c79` (the `'gly'` marker) and whose item-3 is the
 65,569-byte CBOR body. The `'gly'` marker convention always: marker
 push immediately followed by CBOR-body push. Implementation reference:
-pyrxd `src/pyrxd/glyph/inspector.py` `_parse_reveal_scriptsig` (lines
-164–203).
+pyrxd `src/pyrxd/glyph/inspector.py` `GlyphInspector._parse_reveal_scriptsig` (pyrxd 6207b5b8).
 
 ### Singleton Output Script
 
@@ -2930,7 +2926,7 @@ Glyph **receiving and spending**, however, does work with the community-built Ra
 - Mint a Glyph with software signing and send the output to a Ledger-derived address (`m/44'/512'/0'/0/x`)
 - Later spend that Glyph UTXO with a Ledger-signed transaction (the unlocking side is standard P2PKH)
 
-See [`radiant-ledger-guide`](https://github.com/Zyrtnin-org/radiant-ledger-guide) for installation, wallet pairing, and the direct-APDU harness needed for spending Glyph UTXOs (Electron Radiant's GUI doesn't yet recognize Glyph-prefixed P2PKH as spendable — see section 6 of that guide).
+See [`radiant-ledger-guide`](https://github.com/MudwoodLabs/radiant-ledger-guide) for installation, wallet pairing, and the direct-APDU harness needed for spending Glyph UTXOs (Electron Radiant's GUI doesn't yet recognize Glyph-prefixed P2PKH as spendable — see section 6 of that guide).
 
 First Ledger-signed Glyph UTXO spend confirmed on mainnet: [`22d4e0e07200437791b48651125a636b994593b215152241aef7113b24b71da3`](https://explorer.radiantblockchain.org/tx/22d4e0e07200437791b48651125a636b994593b215152241aef7113b24b71da3).
 
@@ -3229,10 +3225,10 @@ transaction.
 
 | What | Reference txid | What to compare |
 |------|---------------|-----------------|
-| Glyph NFT reveal w/ on-chain thumbnail | `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e` | scriptSig push stack (`<sig> <pubkey> <preimage with gly+CBOR>`) and the 63-byte singleton output |
+| Glyph NFT reveal (photo NFT, `loc` = IPFS URL, no on-chain thumbnail) | `27390efab1e3...be7e` | scriptSig push stack (`<sig> <pubkey> "gly" <CBOR>`) and the 63-byte singleton output |
 | V1 dMint deploy commit + reveal (GLYPH token) | commit `a443d9df469692306f7a2566536b19ed7909d8bf264f5a01f5a9b171c7c3878b` / reveal `b965b32dba8628c339bc39a3369d0c46d645a77828aeb941904c77323bb99dd6` | 75-byte FT-commit hashlock script; 32 × 241-byte V1 contract output scripts |
-| V1 dMint mint-tx reward output (snk token, 2026-01) | `146a4d68…f3c` vout[1] (75 bytes: `76 a9 14 <miner_pkh> 88ac bd d0 <token_ref> dec0e9aa76e378e4a269e69d`) | reward-output script byte-equal |
-| V1 dMint mint-tx (PXD token, 2026-05-11) | `c9fdcd3488f3e396bec3ce0b766bb8070963e7e75bb513b8820b6663e469e530` | independent timestamp confirmation: same 4-output mint shape, same 72-byte mint scriptSig, byte-equal `_PART_C` reward bytecode |
+| V1 dMint mint-tx reward output (GLYPH mint, OP_RETURN msg 'snk [r2w]', block 422,865, 2026-04-23) | `146a4d68…81af3c` vout[1] (75 bytes: `76 a9 14 <miner_pkh> 88ac bd d0 <token_ref> dec0e9aa76e378e4a269e69d`) | reward-output script byte-equal |
+| V1 dMint mint-tx (PXD token, 2026-05-12 UTC) | `c9fdcd3488f3e396bec3ce0b766bb8070963e7e75bb513b8820b6663e469e530` | independent timestamp confirmation: same 4-output mint shape, same 72-byte mint scriptSig, byte-equal `_PART_C` reward bytecode |
 | Live RBG dMint reveal w/ 10 V1 contracts | `c5c296ebff5869c6e2b208ce0cd04be479a9f10d33cf73608f0a5efc2d6b55b6` | classifier coverage on vouts 0–13 (10 dMint, 1 FT, 2 NFT, 1 P2PKH) |
 
 ### Required test pattern
@@ -3257,8 +3253,7 @@ dMint footgun" below) or implementing a format that was never deployed
 
 ### Reference implementation: pyrxd's golden-vector tests
 
-The pyrxd Python SDK ships the four golden-vector test classes that
-correspond to the table above. Each pins one wire-format builder against
+The pyrxd Python SDK ships six golden-vector test classes. Each pins one wire-format builder against
 real mainnet bytes; together they cover the full Glyph protocol surface
 that pyrxd builds. Reading them is the fastest way to see what a
 "correct" assertion shape looks like in practice:
@@ -3407,7 +3402,7 @@ address.
 On match, extract `pkh` at positions `[6:46]` and `ref` at `[54:126]`. Group FT
 UTXOs by ref and sum photon values for per-token balance. See the "Wallet
 Classifier Patterns" section above + the reference implementation in
-[`classifier.mjs`](https://github.com/Zyrtnin-org/radiant-ledger-app/blob/main/view-only-ui/classifier.mjs).
+[`classifier.mjs`](https://github.com/MudwoodLabs/radiant-ledger-app/blob/d7427359f3a9a3393bf769c43a0a17c84ee1ec92/view-only-ui/classifier.mjs).
 
 Same pattern applies to NFT singletons (63 bytes) — see the classifier table.
 
@@ -3732,7 +3727,7 @@ if (thumbnail.length > 30000) {
 
 ### Verify on Glyph Explorer
 
-Visit: `https://glyph-explorer.rxd-radiant.com/tx/<reveal_txid>`
+Visit: `https://radiantexplorer.com/tx/<reveal_txid>`
 
 You should see:
 - NFT image displayed (from `main` field)
@@ -3749,9 +3744,8 @@ Import your wallet and check:
 
 ### Verified Working Transactions (January 2026)
 
-**With on-chain thumbnail:**
+**Photo NFT (IPFS `loc`, no on-chain thumbnail):**
 - Reveal: `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e`
-- Thumbnail: 150x200, ~14KB, displays correctly in Glyphium
 
 **dMint V1 deploy (GLYPH token, height 228,604 — byte-decoded from chain):**
 - Deploy commit: `a443d9df469692306f7a2566536b19ed7909d8bf264f5a01f5a9b171c7c3878b`
@@ -3775,15 +3769,15 @@ classifier coverage on live RBG dMint reveals, see [Validating Your Builder
 Against Mainnet](#validating-your-builder-against-mainnet).
 
 **V1 dMint mint tx (canonical 4-output shape — byte-decoded from chain):**
-- `146a4d688ba3fc1ea9588e406cc6104be2c9321738ea093d6db8e1b83581af3c` — snk
-  token, block 422,865. 2 inputs (contract + funding), 4 outputs (recreated
+- `146a4d688ba3fc1ea9588e406cc6104be2c9321738ea093d6db8e1b83581af3c` — GLYPH mint
+  (OP_RETURN msg `snk [r2w]`), block 422,865. 2 inputs (contract + funding), 4 outputs (recreated
   241-byte contract + 75-byte FT reward + OP_RETURN msg marker + change).
   vin[0] is the canonical 72-byte V1 mint scriptSig
   (`<0x04 nonce(4)> <0x20 inputHash(32)> <0x20 outputHash(32)> <0x00>`).
   Full byte-decode: `pyrxd/docs/dmint-research-mainnet.md` §4.
 - `c9fdcd3488f3e396bec3ce0b766bb8070963e7e75bb513b8820b6663e469e530` —
-  PXD token, 2026-05-11. Independent confirmation at a different
-  timestamp (block 422,865 for snk vs. 2026-05-11 for PXD), same
+  PXD token, 2026-05-12 UTC. Independent confirmation at a different
+  timestamp (block 422,865, 2026-04-23 for the GLYPH mint vs. 2026-05-12 UTC for PXD), same
   4-output shape and same 72-byte mint scriptSig layout. Used to
   verify the V1 covenant accepts pyrxd's own mint output bytes. PXD
   deploy reveal: `8eeb333943771991c2752abc78038365ecd76b1a24426f7a3212eea71b6a6564`.
@@ -4058,21 +4052,22 @@ itself.
 
 ### V2 Activation (Block 410,000)
 
-At block 410,000, three things activated simultaneously:
+At block 410,000, two things changed:
 
 - **ASERT difficulty adjustment** — the half-life dropped from 2 days to 12 hours,
   so block-time variance is tighter. Expect faster recovery from hashrate spikes
   and drops.
-- **Six new opcodes** — `OP_BLAKE3` (`0xee`), `OP_K12` (`0xef`), `OP_LSHIFT` (`0x98`),
-  `OP_RSHIFT` (`0x99`), `OP_2MUL` (`0x8d`), `OP_2DIV` (`0x8e`). These enable dMint
-  mining validation and advanced script contracts. See Appendix opcode table.
 - **New fee framework** — defined at 410,000 but enforced on a delay (see below).
+
+(`OP_BLAKE3` (`0xee`), `OP_K12` (`0xef`), `OP_LSHIFT` (`0x98`), `OP_RSHIFT` (`0x99`),
+`OP_2MUL` (`0x8d`) and `OP_2DIV` (`0x8e`) are not part of this activation; they are
+enabled with the enhanced-references rules, mainnet block 62,000. See Appendix opcode table.)
 
 ### Fee Increase (Block 415,000, after grace)
 
 The minimum relay fee rose 10x from 0.01 RXD/kB (legacy) to **0.1 RXD/kB**
 (10,000 photons/byte), with a maximum block min-fee cap of **0.5 RXD/kB**. Between
-blocks 410,000 and 415,000, miners ran under a 5,000-block (~1 week) grace window
+blocks 410,000 and 415,000, miners ran under a 5,000-block (~17 days at the 5-minute target spacing) grace window
 that kept the effective floor at the legacy rate. From block 415,000 onward, the
 0.1 RXD/kB floor is fully enforced — every transaction you build today must meet
 it or receive `{"code":-26,"message":"min relay fee not met (code 66)"}`.
@@ -4086,7 +4081,7 @@ See Fee Calculations & Cost Analysis for the post-V2 cost tables.
   though only SHA256D appears on mainnet today. See [Decentralized Mint (dMint)](#decentralized-mint-dmint)
   for the full V1 contract layout, deploy commit/reveal shapes, CBOR schema, and
   the warning that Photonic-master ships V2-only emitters. For V2-only algorithm
-  and DAA mode parameters, see the [Radiant AI Knowledge Base](https://github.com/Radiant-Core/radiant-mcp-server/blob/master/docs/RADIANT_AI_KNOWLEDGE_BASE.md).
+  and DAA mode parameters, see the [Radiant AI Knowledge Base](https://github.com/Radiant-Core/radiant-mcp-server/blob/59f6150a9e21c529d4756d95d50cfc3e713c412b/docs/RADIANT_AI_KNOWLEDGE_BASE.md).
 - **WAVE** — On-chain naming system (protocol `11`; full marker `p: [2, 5, 11]`).
   Provides human-readable names and DNS-like records. The canonical,
   indexer-recognized shape carries the name in a nested **`attrs`** dict
@@ -4199,7 +4194,7 @@ See [Thumbnail Size vs Cost Tradeoffs](#thumbnail-size-vs-cost-tradeoffs) and [F
 
 **Last Updated:** 2026-06-06 — added covenant-author + indexer-integration learnings (FT genesis-ref clarification, NFT singleton conservation is covenant-only, FT-in-covenant `codeScriptHash` weld, resolving a ref via RXinDexer, WAVE `attrs.name` + Timelocked-Reveal/REP-3009 detail); see Changelog. 2026-05-13 — cross-referenced the four mainnet golden-vector test classes shipped in pyrxd 0.5.1 (FT, NFT, commit, CBOR payload) as a reference implementation downstream SDK authors can mirror. 2026-05-11 added V1 mint tx mechanics (4-output shape, 72-byte mint scriptSig, PoW preimage construction, `PowPreimageResult` reference API). 2026-05-10 added Decentralized Mint (dMint) section with V1 contract layout, deploy shape, CBOR schema, and chain-walking patterns. Based on byte-by-byte mainnet research from pyrxd's V1 dMint mint + deploy work. See Changelog.
 **Based on Verified Mainnet Transactions:**
-- With thumbnail: `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e`
+- Photo NFT (IPFS `loc`, no on-chain thumbnail): `27390efab1e3168c05301b18f6cdfd553a6d122a41496d0f5e104e79a918be7e`
 
 **Key Highlights:**
 1. On-chain images (`main` field) required for wallet display
@@ -4225,7 +4220,7 @@ dependencies, and infrastructure can change. Readers are responsible for:
   own test results on regtest before deploying to mainnet.
 - Auditing any third-party dependency they install (`chainbow/radiantjs`,
   `paroga/cbor-js`, Radiant Core release tarballs, Pinata SDKs, Ledger
-  app-radiant-v1 firmware). Nothing in this guide constitutes a
+  `app-radiant` firmware). Nothing in this guide constitutes a
   recommendation that these dependencies are trustworthy — it documents
   *how* to use them with the least risk, not *whether* to use them.
 - Their own key management and funds. The authors accept no liability for
@@ -4248,7 +4243,7 @@ is yours to navigate.
 
 Radiant's on-chain protocol is versioned by activation height (V2 = block
 410,000, fee change = 415,000, etc.). This guide is versioned independently
-and tracks documentation evolution.
+and tracks documentation evolution. (Section numbers in changelog rows refer to the numbering at the time.)
 
 | Date | Commit range | Summary |
 |---|---|---|
@@ -4266,7 +4261,7 @@ and tracks documentation evolution.
 ### When to re-verify
 
 - **Radiant Core release**: re-run the Verified Working Transactions section against the new version.
-- **Glyph protocol addition** (new opcode, new protocol ID, new required CBOR field): audit sections 5 (On-Chain Images), 7 (Fungible Tokens), 8 (CBOR Payload Format), 14 (Common Errors).
+- **Glyph protocol addition** (new opcode, new protocol ID, new required CBOR field): audit sections 5 (On-Chain Images), 7 (Fungible Tokens), 9 (CBOR Payload Format), 16 (Common Errors).
 - **Pinata/IPFS API change**: audit `uploadFileToPinata` and the IPFS Integration section.
-- **Electron-Wallet / Ledger firmware update**: audit the Hardware Wallet pointer and [`radiant-ledger-guide`](https://github.com/Zyrtnin-org/radiant-ledger-guide) cross-reference.
-- **First mainnet V2 dMint deploy**: update §7 dMint section with V2 contract layout, update Verified Working Transactions, and add a V2 row to the V1/V2 CBOR distinction table.
+- **Electron-Wallet / Ledger firmware update**: audit the Hardware Wallet pointer and [`radiant-ledger-guide`](https://github.com/MudwoodLabs/radiant-ledger-guide) cross-reference.
+- **First mainnet V2 dMint deploy**: update §8 dMint section with V2 contract layout, update Verified Working Transactions, and add a V2 row to the V1/V2 CBOR distinction table.

@@ -208,7 +208,7 @@ Claude automatically generated:
 
 ### With the MCP Server
 
-**Claude can now query the Radiant blockchain directly** via the [Radiant MCP Server](https://github.com/Radiant-Core/radiant-mcp-server) (56 tools across read-only queries, token operations, wallet management, and transaction building):
+**Claude can now query the Radiant blockchain directly** via the [Radiant MCP Server](https://github.com/Radiant-Core/radiant-mcp-server) (59 tools across read-only queries, token operations, wallet management, and transaction building):
 - Check balances, UTXOs, and transaction history
 - Read Glyph token metadata and verify NFT state
 - Build, sign, and broadcast transactions
@@ -284,7 +284,7 @@ Restart your Claude Code session after adding. Verify with `claude mcp list`.
 - Radiant node via Docker (RPC on port 7332)
 - PHP backend for RPC calls
 - JavaScript frontend
-- Node.js 18+ available
+- Node.js 22+ available
 - Windows development machine
 
 I want to implement Glyph NFTs using commit/reveal pattern."
@@ -326,7 +326,7 @@ Before writing any code, ensure:
 
 - [ ] CBOR library downloaded and added to HTML **before** blockchain scripts
 - [ ] Radiant node accessible via RPC
-- [ ] Node.js 18+ installed for signing scripts
+- [ ] Node.js 22+ installed for signing scripts
 - [ ] `@radiantblockchain/radiantjs` installed
 - [ ] IPFS provider configured (Pinata recommended)
 
@@ -520,7 +520,7 @@ function encodeGlyphData(data) {
 ### dMint V1 Deploy
 
 A V1 deploy is a multi-contract, heterogeneous-input transaction
-significantly more complex than a standard NFT mint. Read [§7 — dMint V1 Deploy in README.md](README.md#dmint-v1-deploy-multi-contract-structure)
+significantly more complex than a standard NFT mint. Read [§8 — Decentralized Mint (dMint) in README.md](README.md#decentralized-mint-dmint) (deploy shape: [commit](README.md#dmint-deploy-commit-tx-output-shape), [reveal](README.md#dmint-deploy-reveal-tx-io-shape))
 before prompting Claude to build one. The four gotchas documented there (classifier gap,
 mint-shape mismatch, hashlock-reuse, byte-scan DoS) were each caught only by comparing
 pyrxd's output byte-for-byte against the on-chain GLYPH deploy — not by unit tests alone.
@@ -683,7 +683,7 @@ console.log('Thumbnail size:', payload.main?.b?.length);
 ```
 
 **4. Check Transaction**
-- View on Glyph Explorer: `https://glyph-explorer.rxd-radiant.com/tx/<txid>`
+- View on an explorer: `https://radiantexplorer.com/tx/<txid>`
 - Verify metadata decodes correctly
 
 ### When Transactions Fail
@@ -839,7 +839,7 @@ async createThumbnail(dataUrl, maxSize, quality) {
 
 **AI Development Tools:**
 - Radiant MCP Server: https://github.com/Radiant-Core/radiant-mcp-server
-- AI Knowledge Base: https://github.com/Radiant-Core/radiant-mcp-server/blob/master/docs/RADIANT_AI_KNOWLEDGE_BASE.md
+- AI Knowledge Base: https://github.com/Radiant-Core/radiant-mcp-server/blob/main/docs/RADIANT_AI_KNOWLEDGE_BASE.md
 
 **Ecosystem Tools:**
 - RXinDexer (token indexer): https://github.com/Radiant-Core/RXinDexer
@@ -962,7 +962,7 @@ Post in #development with:
 
 ---
 
-**Last Updated:** 2026-04-16
+**Last Updated:** 2026-05-13
 **Author:** Radiant Developer Community
 **License:** MIT - Free to use and share
 
