@@ -18,7 +18,7 @@ Designed to be used as context for AI coding agents (Claude, Cursor, etc.) — p
 > - **Writing a covenant or token-aware contract?** → Read [Avoid Phantom Refs in Embedded Bytecode](#constructing-covenants-avoid-phantom-refs-in-embedded-bytecode) and [NFT Conservation Has No Consensus "Exactly One" Rule](#nft-conservation-has-no-consensus-exactly-one-rule): an FT cannot be held in a foreign covenant (gate its spend path); an NFT can. For ref-authenticity checks against an indexer, see [Resolving a Ref via RXinDexer](#resolving-a-ref-via-rxindexer).
 > - **Debugging a failed mint?** → Jump to section 16 (Common Errors) and the Appendix (opcodes, hex values)
 > - **Upgrading to V2?** → Read section 20 (What's New in V2) and the Fee Calculations section for updated costs
-> - **Hardware wallet (Ledger) support?** → See [`radiant-ledger-guide`](https://github.com/MudwoodLabs/radiant-ledger-guide). Minting still requires software signing; receiving + spending Glyph UTXOs works with the community Ledger app
+> - **Hardware wallet (Ledger) support?** → See [Hardware Wallet Support](#hardware-wallet-support). This guide no longer recommends a Ledger app; use software signing for Glyph operations
 > - **Using Claude with MCP?** → See [BUILDING_WITH_CLAUDE.md](BUILDING_WITH_CLAUDE.md) for MCP setup and workflow tips
 
 ---
@@ -486,7 +486,7 @@ confirm:
 
 1. The reveal transaction confirms in a block you generate.
 2. `listunspent` on the destination wallet shows the Glyph UTXO.
-3. A view-only classifier (e.g. `radiant-ledger-app/view-only-ui/`)
+3. A view-only classifier (e.g. [`reference/classifier/`](reference/classifier/))
    recognises the scriptPubKey shape.
 
 Only after all three check out should you touch mainnet. Mainnet funding —
@@ -909,8 +909,7 @@ link-token location, and remote files are described as `{t, u, h}`.
 > 82 bytes on chain (~0.008 RXD at post-V2 rates).
 
 **Consumer-side verification** — `loc_hash` only helps if the *renderer*
-checks it. Minimal viewer code (browser-side, matching the
-renderer in `radiant-ledger-app/view-only-ui/`):
+checks it. Minimal viewer code (browser-side):
 
 ```javascript
 async function renderLoc(payload, gatewayUrl) {
@@ -1245,8 +1244,7 @@ The full sequence is `de` OP_REFOUTPUTCOUNT_OUTPUTS, `c0` OP_INPUTINDEX,
 `e6` OP_CODESCRIPTHASHOUTPUTCOUNT_OUTPUTS, `9d` OP_NUMEQUALVERIFY.
 `aa 76 78 a2 69 9d` are inherited Bitcoin opcodes, `c0` is native
 introspection, and `de e9 e3 e4 e6` are Radiant ref/code-script opcodes.
-Together they wire the two sums into the conservation check. A full opcode-by-opcode decode is available in
-[`radiant-ledger-app/docs/solutions/integration-issues/radiant-glyph-ft-template-and-view-only-renderer.md`](https://github.com/MudwoodLabs/radiant-ledger-app/blob/d7427359f3a9a3393bf769c43a0a17c84ee1ec92/docs/solutions/integration-issues/radiant-glyph-ft-template-and-view-only-renderer.md) — for this guide, the important
+Together they wire the two sums into the conservation check. The important
 takeaway is that together they enforce **Σ input photons ≥ Σ output photons**
 per codeScript hash, and that every output carrying the ref also carries this
 code-script — tokens cannot be inflated by a normal spend. New supply enters
@@ -1263,9 +1261,8 @@ the script is what determines the boundary between "what the signer proves"
 and "what the network enforces." Don't omit it; don't move it. The scriptSig
 only needs to satisfy the prologue — which is why FT spends use the same
 `<sig> <pubkey>` as plain P2PKH. A hardware-wallet app must still recognise
-the 75-byte output on its review screen: the community Ledger app needed its
-Glyph-transfer firmware changes (see [Disclaimer](#disclaimer--warranty)) to
-sign FT transfers.
+the 75-byte output on its review screen and show it as a token transfer, not
+as a plain payment.
 
 ### FT Token Amount
 
@@ -1330,7 +1327,7 @@ Key differences from NFT CBOR:
 For wallet developers integrating Glyph support — three regex patterns
 that classify every mainnet-observed spendable script shape. Tested against
 19 classifier vectors (7 from real mainnet txs, 12 synthetic negatives;
-derived from a 2,309-sample, 6-token, 500-block scan) in [`radiant-ledger-app/view-only-ui/fixtures/classifier-vectors.json`](https://github.com/MudwoodLabs/radiant-ledger-app/blob/d7427359f3a9a3393bf769c43a0a17c84ee1ec92/view-only-ui/fixtures/classifier-vectors.json).
+derived from a 2,309-sample, 6-token, 500-block scan) in [`reference/classifier/fixtures/classifier-vectors.json`](reference/classifier/fixtures/classifier-vectors.json) (run `node reference/classifier/fixtures/test_classifier.mjs`).
 
 ```
 Plain P2PKH (25B):   ^76a914[0-9a-f]{40}88ac$
@@ -1357,7 +1354,7 @@ dMint contract scripts (234–241 B in the V1 contracts sampled here; the size i
 these patterns — they correctly classify as `unknown` and should not be surfaced
 to users as spendable outputs.
 
-Reference implementation: [`classifier.mjs`](https://github.com/MudwoodLabs/radiant-ledger-app/blob/d7427359f3a9a3393bf769c43a0a17c84ee1ec92/view-only-ui/classifier.mjs) (pure ES module, 101 lines at that commit, no imports).
+Reference implementation: [`reference/classifier/classifier.mjs`](reference/classifier/classifier.mjs) (pure ES module, 101 lines, no imports).
 
 **dMint contract outputs** (state + the fixed 145-byte epilogue; 241 bytes for GLYPH; 234–241 B in the V1 contracts sampled here; the size is not fixed (a reward or maxHeight ≥ 2^23 needs a wider push)) do not match any of the three patterns above
 and will classify as `unknown`. This is correct for wallet display — they are not user-spendable.
@@ -3033,14 +3030,12 @@ async function signReveal(params) {
 
 Glyph **minting** cannot currently be done from a hardware wallet: the reveal transaction's scriptSig (`<sig> <pubkey> <"gly"> <CBOR>`) is non-standard, and no mainstream hardware wallet supports signing arbitrary script structures. Minting requires software signing via Node.js as shown above.
 
-Glyph **receiving and spending**, however, does work with the community-built Radiant Ledger Nano S Plus app. You can:
-
-- Mint a Glyph with software signing and send the output to a Ledger-derived address (`m/44'/512'/0'/0/x`)
-- Later spend that Glyph UTXO with a Ledger-signed transaction (the unlocking side is standard P2PKH)
-
-See [`radiant-ledger-guide`](https://github.com/MudwoodLabs/radiant-ledger-guide) for installation, wallet pairing, and the direct-APDU harness needed for spending Glyph UTXOs (Electron Radiant's GUI doesn't yet recognize Glyph-prefixed P2PKH as spendable — see section 6 of that guide).
-
-First Ledger-signed Glyph UTXO spend confirmed on mainnet: [`22d4e0e07200437791b48651125a636b994593b215152241aef7113b24b71da3`](https://explorer.radiantblockchain.org/tx/22d4e0e07200437791b48651125a636b994593b215152241aef7113b24b71da3).
+This guide no longer recommends a Ledger app. The community-built Radiant
+Ledger app it previously linked has been retired, and its repositories are no
+longer public; do not install its firmware. A hardware-wallet app that signs
+Glyph outputs must hash each output's push refs into `hashOutputHashes` in the
+order consensus uses, and must show token outputs as token transfers rather
+than as plain payments.
 
 ---
 
@@ -3514,7 +3509,7 @@ address.
 On match, extract `pkh` at positions `[6:46]` and `ref` at `[54:126]`. Group FT
 UTXOs by ref and sum photon values for per-token balance. See the "Wallet
 Classifier Patterns" section above + the reference implementation in
-[`classifier.mjs`](https://github.com/MudwoodLabs/radiant-ledger-app/blob/d7427359f3a9a3393bf769c43a0a17c84ee1ec92/view-only-ui/classifier.mjs).
+[`reference/classifier/classifier.mjs`](reference/classifier/classifier.mjs).
 
 Same pattern applies to NFT singletons (63 bytes) — see the classifier table.
 
@@ -4378,25 +4373,17 @@ dependencies, and infrastructure can change. Readers are responsible for:
 - Verifying all claims against the current Radiant Core source and their
   own test results on regtest before deploying to mainnet.
 - Auditing any third-party dependency they install (`@radiant-core/radiantjs`,
-  `paroga/cbor-js`, Radiant Core release tarballs, Pinata SDKs, Ledger
-  `app-radiant` firmware). Nothing in this guide constitutes a
+  `paroga/cbor-js`, Radiant Core release tarballs, Pinata SDKs, hardware-wallet
+  firmware). Nothing in this guide constitutes a
   recommendation that these dependencies are trustworthy — it documents
   *how* to use them with the least risk, not *whether* to use them.
 - Their own key management and funds. The authors accept no liability for
   lost RXD, lost NFTs, lost FT supply, stuck commit UTXOs, or
   attacker-controlled spends resulting from misapplied patterns.
 
-**Ledger app-radiant-v1 is community-maintained and unaudited.** The
-Glyph-transfer patch (released as `v0.0.8-glyph-transfer`, followed by the
-`v0.0.5-security-fixes` pre-release with AI-assisted audit remediation whose
-fixes have not been reviewed by another human) was built to demonstrate that
-Glyph transfer-preserving spends *can* be signed by a Ledger device. Use the
-`v0.0.5-security-fixes` pre-release: it contains the `v0.0.8-glyph-transfer`
-change plus later security fixes (including one that closes a fund-diversion
-path through the change-address check). `v0.0.8-glyph-transfer`, `v0.0.6` and
-`v0.0.7` predate those fixes; tag numbers are not chronological. It has
-not undergone a formal human security audit. Use it on testnet first; if you use it
-on mainnet, start with values you can afford to lose.
+**This guide does not recommend any Ledger firmware.** The community-built
+Radiant Ledger app it previously described has been retired; do not install its
+releases.
 
 In short: treat this guide as a technical map, not a warranty. The terrain
 is yours to navigate.
@@ -4428,5 +4415,5 @@ and tracks documentation evolution. (Section numbers in changelog rows refer to 
 - **Radiant Core release**: re-run the Verified Working Transactions section against the new version.
 - **Glyph protocol addition** (new opcode, new protocol ID, new required CBOR field): audit sections 5 (On-Chain Images), 7 (Fungible Tokens), 9 (CBOR Payload Format), 16 (Common Errors).
 - **Pinata/IPFS API change**: audit `uploadFileToPinata` and the IPFS Integration section.
-- **Electron-Wallet / Ledger firmware update**: audit the Hardware Wallet pointer and [`radiant-ledger-guide`](https://github.com/MudwoodLabs/radiant-ledger-guide) cross-reference.
+- **Electron-Wallet / hardware-wallet update**: audit the Hardware Wallet Support section.
 - **dMint contract changes** (a new V2 shape or DAA mode): update the §8 dMint section, the V1 vs V2 table and Verified Working Transactions.
