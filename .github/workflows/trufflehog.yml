@@ -25,7 +25,7 @@ jobs:
       # whatever `latest` was that day. 3.97.9 is what `latest` resolved to on
       # 2026-10-01, i.e. what this job was already running; the wrapper SHA is
       # tag v3.97.5, whose action.yml is identical to main's that day.
-      - uses: trufflesecurity/trufflehog@f714bf454f350590f4a24c3ddb1aef02c35bf5b6 # v3.97.5
+      - uses: trufflesecurity/trufflehog@31ce31ee1abbcc7dc8eee5764c17121c3044c8b2 # v3.99.7
         with:
           version: "3.97.9@sha256:52e67fef4d054ecff5c2ce4b4ae376626d1ef54aa0898b53cac19c25e92e14db"
           extra_args: --results=verified,unknown
