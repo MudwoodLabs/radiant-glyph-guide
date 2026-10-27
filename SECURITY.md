@@ -7,9 +7,6 @@ If you find a security issue in radiant-glyph-guide, please report it
 
 Send disclosure to: **security@mudwoodlabs.com**
 
-Alternatively, use GitHub's private vulnerability reporting:
-<https://github.com/MudwoodLabs/radiant-glyph-guide/security/advisories/new>
-
 We aim to acknowledge receipt within **2 business days**.
 
 ## Scope

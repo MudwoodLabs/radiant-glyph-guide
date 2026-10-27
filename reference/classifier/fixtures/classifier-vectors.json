@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "description": "Golden vectors for Radiant Glyph script classifier. Samples drawn from the 500-block mainnet scan documented in ../../scripts/find_ft_utxo.py output (tip 420968 \u2192 420469). Each 'source' field gives a real mainnet txid:vout for independent verification.",
+  "vectors": [
+    {
+      "name": "plain_p2pkh_large_coin",
+      "source": "mainnet tx 72eb90d570807eb9ccf4ac99edc8a7c3e807f694dfde9fac37dc95a1118f04e8 vout[3] \u2014 change output to 1Cg55vEw8T4SWgJqeDs353LDwtNgndgNbH (an active mainnet RXD holder, unrelated to the Ledger test seed)",
+      "spk_hex": "76a914800d0414e758f790a48ad0f2960d566ef56cd5bf88ac",
+      "expected": {
+        "type": "p2pkh",
+        "pkh": "800d0414e758f790a48ad0f2960d566ef56cd5bf"
+      }
+    },
+    {
+      "name": "nft_singleton_63b_ledger_mint",
+      "source": "mainnet tx 6c32fcbbd6834170b3afcb9bbed759eeb21db72fd509790a3cb804c6eb5c0630 vout[0] \u2014 FlipperHub NFT minted to Ledger address 1GT2rB99dRZd919Z1ZkFKZMRijDEu2D7DX (path m/44'/512'/0'/0/3), later spent by Ledger-signed tx 22d4e0e07200437791b48651125a636b994593b215152241aef7113b24b71da3. The mainnet proof of Ledger custody for Glyph UTXOs.",
+      "spk_hex": "d808480623910ba219a0903afa9f10140c31c30f0529d51f860401cb79caf24ed0000000007576a914a9763e88160a63a3f03bf846268ed0fb8abd8b5588ac",
+      "expected": {
+        "type": "nft",
+        "ref": "08480623910ba219a0903afa9f10140c31c30f0529d51f860401cb79caf24ed000000000",
+        "pkh": "a9763e88160a63a3f03bf846268ed0fb8abd8b55"
+      }
+    },
+    {
+      "name": "ft_holder_75b_262a4d95",
+      "source": "mainnet tx 262a4d95c0e9b94bba85aa5382e69de36bb31053746aff8e740c7b4170d27fd4 vout[1] (75-byte FT holder, dominant token)",
+      "spk_hex": "76a91432e092994ebdf8db0861b0e9208878c4221c472188acbdd08b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000dec0e9aa76e378e4a269e69d",
+      "expected": {
+        "type": "ft",
+        "pkh": "32e092994ebdf8db0861b0e9208878c4221c4721",
+        "ref": "8b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000"
+      }
+    },
+    {
+      "name": "ft_holder_75b_6ce2bdb5_vout0",
+      "source": "mainnet tx 6ce2bdb5f065dcc4d13a6eb1e1f5dc5e03af2733fb7ef7f78e07a450c8494f06 vout[0] (different FT token, confirms template generalizes across refs)",
+      "spk_hex": "76a9146fdc2880d5afbefcdbc89b31850414beec7d56bd88acbdd04bbba9407337be1465de8182dd88f5fb82355dd94e6acb45b1bc5e6f826aee4c00000000dec0e9aa76e378e4a269e69d",
+      "expected": {
+        "type": "ft",
+        "pkh": "6fdc2880d5afbefcdbc89b31850414beec7d56bd",
+        "ref": "4bbba9407337be1465de8182dd88f5fb82355dd94e6acb45b1bc5e6f826aee4c00000000"
+      }
+    },
+    {
+      "name": "ft_holder_75b_6ce2bdb5_vout1",
+      "source": "mainnet tx 6ce2bdb5... vout[1] (same tx, same token, different holder pkh \u2014 proves multi-recipient FT transfers work)",
+      "spk_hex": "76a914a434fbfe62e6cda47168f0ce4db4edb3c1b808e988acbdd04bbba9407337be1465de8182dd88f5fb82355dd94e6acb45b1bc5e6f826aee4c00000000dec0e9aa76e378e4a269e69d",
+      "expected": {
+        "type": "ft",
+        "pkh": "a434fbfe62e6cda47168f0ce4db4edb3c1b808e9",
+        "ref": "4bbba9407337be1465de8182dd88f5fb82355dd94e6acb45b1bc5e6f826aee4c00000000"
+      }
+    },
+    {
+      "name": "ft_control_241b_negative",
+      "source": "mainnet tx 262a4d95... vout[0] (241-byte FT mint/control script \u2014 intentionally NOT spendable as P2PKH)",
+      "spk_hex": "043bd10000d88b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a406000000d08b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000036889090350c3000874da40a70d74da00bd5175c0c855797ea8597959797ea87e5a7a7eaabc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551",
+      "expected": {
+        "type": "unknown"
+      },
+      "note": "Classifier must NOT surface these as spendable. These are the mint-authority scripts that enforce FT mint rules \u2014 the wallet shouldn't try to sign them."
+    },
+    {
+      "name": "op_return_short",
+      "source": "mainnet tx 72eb90d5... vout[2]",
+      "spk_hex": "6a036d736709736e6b205b7236395d",
+      "expected": {
+        "type": "op_return"
+      }
+    },
+    {
+      "name": "malformed_ft_wrong_tail",
+      "source": "synthetic \u2014 75 bytes, valid P2PKH head and bdd0 middle, but suffix bytes flipped",
+      "spk_hex": "76a91432e092994ebdf8db0861b0e9208878c4221c472188acbdd08b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000ffffffffffffffffffffffff",
+      "expected": {
+        "type": "unknown"
+      },
+      "note": "Template must be matched exactly \u2014 a different tail (e.g. a future variant) correctly falls through to 'unknown' rather than being misclassified."
+    },
+    {
+      "name": "malformed_nft_wrong_drop_byte",
+      "source": "synthetic \u2014 byte at offset 37 is 0xff instead of the expected OP_DROP (0x75)",
+      "spk_hex": "d8358f3f90a2d278d17bd10a0b93482e9ba30e2ccd23ad4eefec2b08ebf4d12de900000000ff76a914a434fbfe62e6cda47168f0ce4db4edb3c1b808e988ac",
+      "expected": {
+        "type": "unknown"
+      }
+    },
+    {
+      "name": "malformed_ft_wrong_length",
+      "source": "synthetic \u2014 74 bytes (missing one byte of tail)",
+      "spk_hex": "76a91432e092994ebdf8db0861b0e9208878c4221c472188acbdd08b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000dec0e9aa76e378e4a269e6",
+      "expected": {
+        "type": "unknown"
+      }
+    },
+    {
+      "name": "not_hex",
+      "source": "synthetic",
+      "spk_hex": "hello world",
+      "expected": {
+        "type": "invalid"
+      }
+    },
+    {
+      "name": "empty",
+      "source": "synthetic",
+      "spk_hex": "",
+      "expected": {
+        "type": "unknown"
+      }
+    },
+    {
+      "name": "negative_uppercase_p2pkh_still_classifies",
+      "source": "synthetic \u2014 same P2PKH as plain_p2pkh_large_coin but uppercase hex. classify() lowercases input so this must still parse as p2pkh",
+      "spk_hex": "76A914800D0414E758F790A48AD0F2960D566EF56CD5BF88AC",
+      "expected": {
+        "type": "p2pkh",
+        "pkh": "800d0414e758f790a48ad0f2960d566ef56cd5bf"
+      }
+    },
+    {
+      "name": "negative_nft_wrong_terminator",
+      "source": "synthetic \u2014 63-byte shape with correct d8/ref/75/76a914 but terminator is 88ab (OP_1SUB_LESSTHAN style nonsense) instead of 88ac (OP_CHECKSIG). Must be classified as unknown, not NFT.",
+      "spk_hex": "d808480623910ba219a0903afa9f10140c31c30f0529d51f860401cb79caf24ed0000000007576a914a9763e88160a63a3f03bf846268ed0fb8abd8b5588ab",
+      "expected": {
+        "type": "unknown"
+      }
+    },
+    {
+      "name": "negative_ft_wrong_mid_opcode",
+      "source": "synthetic \u2014 75-byte shape with correct pkh/tail but FT_MID is 88acbdd1 (wrong final nibble) instead of 88acbdd0. Must be unknown, not FT.",
+      "spk_hex": "76a91432e092994ebdf8db0861b0e9208878c4221c472188acbdd18b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000dec0e9aa76e378e4a269e69d",
+      "expected": {
+        "type": "unknown"
+      }
+    },
+    {
+      "name": "negative_ft_truncated_epilogue",
+      "source": "synthetic \u2014 75-byte shape where FT_TAIL has one nibble flipped at position 0 ('ee' instead of 'de' starting). Conservation check would fail at consensus but classifier should refuse regardless.",
+      "spk_hex": "76a91432e092994ebdf8db0861b0e9208878c4221c472188acbdd08b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000eec0e9aa76e378e4a269e69d",
+      "expected": {
+        "type": "unknown"
+      }
+    },
+    {
+      "name": "negative_oversize_script_no_regex_hang",
+      "source": "synthetic \u2014 8 KB of random hex starting with d8 (looks NFT-prefixed). Should classify as unknown in O(1) time \u2014 regex is linear, no backtracking.",
+      "spk_hex": "d8abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "expected": {
+        "type": "unknown"
+      }
+    },
+    {
+      "name": "negative_p2pkh_wrong_push_byte",
+      "source": "synthetic \u2014 25-byte script with 76a9 **13** (push 19 bytes) instead of 76a914 (push 20). Length matches P2PKH template but the push length is wrong. Must be unknown.",
+      "spk_hex": "76a913800d0414e758f790a48ad0f2960d566ef56cd588ac00",
+      "expected": {
+        "type": "unknown"
+      }
+    },
+    {
+      "name": "negative_odd_length_hex",
+      "source": "synthetic \u2014 hex string with odd number of chars ('7'). classify() must return invalid, not crash.",
+      "spk_hex": "7",
+      "expected": {
+        "type": "invalid"
+      }
+    }
+  ]
+}
